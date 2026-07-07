@@ -1,279 +1,104 @@
 # CLAUDE.md
+See @README.md for project overview.
 
-This file provides repository-specific guidance to Claude Code when working on ToppFinance.
+## Propósito
 
-## Project Overview
+Este documento resume cómo trabajar en **toppfinance** desde Claude Code y mantiene alineada la documentación operativa con el README. Debe actualizarse cuando cambien la arquitectura del monorepo, los scripts, las variables de entorno, Prisma, Docker o el flujo de despliegue.
 
-ToppFinance is a mobile-first web application for personal and couple finance management. It is designed for exactly two fixed users who need to manage private and shared finances with clear privacy boundaries.
+## Arquitectura del monorepo
 
-The product goal is to help both users:
-- register and manage financial movements,
-- control monthly budgets,
-- understand financial evolution,
-- support the future transition from separate accounts to a shared account,
-- receive useful AI-powered insights without overcomplicating the MVP.
+- Gestor de paquetes detectado: **npm**.
+- Workspaces declarados en la raíz: **['apps/*', 'packages/*']**.
+- La raíz centraliza dependencias compartidas y orquesta tareas globales; cada app o paquete conserva sus scripts propios en su `package.json`.
 
-This repository is partially implemented. Do not assume the current architecture or data model is final or correct. Analyze what already exists, reuse what is good, and challenge what is weak, inconsistent, unfinished, or overengineered.
+### Scripts de la raíz
 
-## Product Rules
+- `dev`: `concurrently -n api,web -c cyan,green "npm run dev -w @toppfinance/api" "npm run dev -w @toppfinance/web"`
+- `dev:api`: `npm run dev -w @toppfinance/api`
+- `dev:web`: `npm run dev -w @toppfinance/web`
+- `build`: `npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && npm run build -w @toppfinance/web`
+- `test`: `npm run test --workspaces --if-present`
+- `check`: `npm run check --workspaces --if-present`
+- `lint`: `npm run lint --workspaces --if-present`
+- `db:generate`: `prisma generate`
+- `db:migrate`: `prisma migrate dev`
+- `db:deploy`: `prisma migrate deploy`
+- `db:seed`: `npm run build -w @toppfinance/shared && tsx prisma/seed.ts`
+- `backup`: `npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && tsx scripts/backup.ts`
+- `preview`: `npm run preview -w @toppfinance/web`
 
-### Users and privacy
-- There are exactly two fixed users.
-- Each user has basic authentication with email and password.
-- Each user can see:
-  - their own private data,
-  - shared data.
-- Each user must not see the other user's private data.
+### Workspaces detectados
 
-### Financial scope
-The core movement types are:
-- EXPENSE
-- INCOME
-- SAVING
-- TRANSFER
-- ADJUSTMENT
+| Ruta | Nombre del paquete | Scripts |
+|---|---|---|
+| `apps/api` | `@toppfinance/api` | dev, build, start, test, check |
+| `apps/web` | `@toppfinance/web` | dev, build, preview, test, check |
+| `packages/shared` | `@toppfinance/shared` | build, check |
 
-The app must support:
-- manual transaction creation,
-- CSV import,
-- transaction editing,
-- recategorization,
-- deletion,
-- account balance tracking,
-- monthly budgets,
-- analytics.
+## Flujo de trabajo
 
-The app must support both:
-- current scenario: separate personal accounts,
-- future scenario: a shared account for common expenses.
+1. Instalar dependencias desde la raíz con el gestor de paquetes del repositorio.
+2. Ejecutar desde la raíz los scripts agregados del monorepo cuando afecten a varios workspaces.
+3. Ejecutar en el workspace correspondiente los comandos específicos de cada aplicación o paquete.
+4. Antes de fusionar cambios, validar como mínimo lint, typecheck, tests y build en los workspaces afectados.
 
-### Shared expense logic
-Shared expenses are not always split 50/50.
-They must support configurable proportional splits based on each user's configured contribution percentage.
-Do not hardcode the split logic. Review current implementation first.
+## Variables de entorno
 
-### Budgets
-The product must support three monthly budgets:
-- user A personal budget,
-- user B personal budget,
-- shared budget.
+Archivos `.env.example` detectados:
+- `.env.example`
 
-Budgets group spending categories.
+Reglas:
+- Nunca añadir secretos reales al repositorio.
+- Mantener un `.env.example` actualizado por cada app o servicio que dependa de configuración.
+- Documentar en README y en este archivo cualquier variable nueva, indicando si aplica a local, Docker, CI o producción.
+- Mantener consistencia entre variables de aplicación, Prisma, contenedores y despliegue.
 
-### Categories and metadata
-Categories are editable from the app.
-They belong to the main financial domains and may already exist in the current project.
-Support:
-- tags,
-- merchants / frequent merchants,
-- notes,
-- useful filtering.
+## Prisma
 
-Do not prioritize receipt/file attachment support in the MVP.
+Esquemas detectados:
+- `prisma/schema.prisma`
 
-## MVP Priorities
+Flujo recomendado:
+1. Editar el `schema.prisma` en el workspace afectado.
+2. Crear migraciones de desarrollo con `prisma migrate dev` o con el script equivalente del workspace.
+3. Regenerar el cliente con `prisma generate` si el flujo del workspace no lo hace automáticamente.
+4. Aplicar en despliegue con `prisma migrate deploy`.
+5. No modificar migraciones ya ejecutadas en entornos compartidos salvo estrategia explícita de rollback.
 
-Prioritize a functional MVP over feature breadth.
+## Docker
 
-High priority:
-- authentication,
-- privacy rules,
-- accounts and balances,
-- manual transaction CRUD,
-- CSV import,
-- categories,
-- monthly budgets,
-- dashboards and core analytics,
-- basic settings,
-- backup configuration,
-- log viewing,
-- OpenRouter integration for real AI-assisted insights.
+Ficheros Docker detectados:
+- `Dockerfile`
+- `docker-compose.yml`
 
-Lower priority:
-- advanced forecasting,
-- polished AI chat,
-- extra automation,
-- non-essential visual effects,
-- attachment management.
+Pautas:
+- Levantar servicios desde la raíz cuando exista dependencia entre apps, base de datos o volúmenes compartidos.
+- Alinear puertos, redes, volúmenes y variables de entorno con lo documentado en README.
+- Si una imagen depende de artefactos compilados, ejecutar install/build antes de construirla.
+- Evitar duplicar configuración entre entorno local y Docker sin dejar trazabilidad en la documentación.
 
-Avoid adding features that increase complexity without strong MVP value.
+## Backup
 
-## AI Integration
+Buenas prácticas:
+- Definir qué se respalda: bases de datos, adjuntos, exports y cualquier estado persistente.
+- Ejecutar backup antes de migraciones destructivas o cambios relevantes de infraestructura.
+- Versionar scripts de backup y restauración si forman parte del proyecto.
+- Probar restauraciones de forma periódica.
 
-AI must be implemented through OpenRouter, not mocked.
+## Despliegue
 
-Expected AI capabilities:
-- recategorization suggestions,
-- spending insights,
-- alerts,
-- anomaly detection,
-- forecasting,
-- savings recommendations,
-- chat over movements.
+Checklist mínima:
+1. Instalar dependencias limpias.
+2. Ejecutar lint, typecheck, tests y build en la raíz y en los workspaces afectados.
+3. Aplicar migraciones de base de datos de manera controlada.
+4. Construir imágenes o artefactos finales.
+5. Desplegar al entorno objetivo.
+6. Verificar healthchecks, logs, conectividad y tareas post-deploy.
 
-Requirements:
-- anonymize data before sending to the provider whenever reasonable,
-- keep API keys and sensitive config server-side,
-- allow configurable default model and fallback models,
-- avoid vendor lock-in to a single model.
+## Reglas para asistentes
 
-## UX and Product Expectations
-
-This app must be:
-- mobile-first,
-- installable as a PWA,
-- fast,
-- simple,
-- modern,
-- practical.
-
-Do not design for offline-first unless explicitly required later.
-Do not assume local-device data storage is part of the functional model.
-The primary use case is an installed-feeling webapp with persistent login and strong online UX.
-
-## Operational Requirements
-
-The app is expected to run:
-- locally during development,
-- in a homelab in production.
-
-Access is expected through Tailscale, not a public domain.
-
-The app must include:
-- configurable backup policy from admin settings,
-- log viewing from the app,
-- filtering by log type/category,
-- maintainable Docker-based deployment,
-- good internal documentation,
-- tests and validation checks.
-
-Default backup idea:
-- weekly backups,
-- 30 retained copies,
-but make it configurable from admin settings rather than hardcoded.
-
-## Development Workflow Rules
-
-When working in this repository, follow these rules:
-
-1. Analyze before changing.
-2. Do not assume incomplete code is correct.
-3. Reuse existing code where it is solid.
-4. Challenge bad architecture or weak abstractions.
-5. Ask questions only when the missing detail materially changes architecture, security, permissions, persistence, or UX.
-6. If a detail does not materially change the outcome, proceed with a clearly stated assumption.
-7. Before large refactors or broad implementation changes, present:
-   - current-state analysis,
-   - proposed architecture,
-   - critical open questions,
-   - implementation plan.
-8. Prefer small, reviewable changes over large rewrites.
-9. Keep the project working as you iterate.
-10. Do not introduce secrets into the codebase.
-
-## Repository Structure
-
-This is a monorepo with npm workspaces.
-
-```text
-/
-├── apps/
-│   ├── api/              # Fastify + TypeScript backend
-│   └── web/              # React + Vite frontend
-├── packages/
-│   └── shared/           # Shared schemas, types, contracts
-├── prisma/               # Prisma schema, migrations, seed
-├── scripts/              # Utility scripts
-└── package.json
-```
-
-## Main Tech Stack
-
-- Frontend: React 18 + Vite + Tailwind CSS
-- Backend: Fastify + TypeScript
-- Database: Prisma
-- Shared contracts: Zod + TypeScript
-- Charts: Recharts
-- Icons: Lucide React
-
-Do not replace core stack choices casually unless there is a strong architectural reason.
-
-## Common Commands
-
-### Development
-- `npm run dev` - start API and web
-- `npm run dev:api` - start API only
-- `npm run dev:web` - start web only
-- `npm run build` - build all packages
-- `npm run test` - run tests
-- `npm run lint` - run lint
-- `npm run check` - run TypeScript checks
-
-### Database
-- `npm run db:generate`
-- `npm run db:migrate`
-- `npm run db:deploy`
-- `npm run db:seed`
-
-### Operations
-- `npm run backup`
-
-## Implementation Guidelines
-
-### Backend
-- Validate all input with shared Zod schemas.
-- Enforce authorization consistently.
-- Use transactions for multi-step financial writes.
-- Audit important actions.
-- Keep secrets and provider integrations server-side.
-- Return safe error messages to clients.
-
-### Frontend
-- Keep UI mobile-first.
-- Prefer clear flows over dense dashboards.
-- Handle loading, empty, and error states properly.
-- Use existing shared types/contracts.
-- Keep interactions fast and practical.
-
-### Data and money
-- Be careful with money precision and date handling.
-- Never introduce fragile float-based money logic.
-- Preserve consistency between transactions, balances, and derived analytics.
-
-### CSV import
-- CSV import is manual and controlled.
-- Define a clean, maintainable CSV format.
-- Warn on likely duplicates, but do not hard-block import.
-- Imported data must remain editable.
-
-## Quality Bar
-
-A task is not complete unless relevant checks pass.
-
-Before considering work done:
-- run tests relevant to the change,
-- run lint,
-- run type checks,
-- confirm the changed flow works end-to-end when feasible,
-- update documentation if architecture, setup, or behavior changed.
-
-## What to Avoid
-
-- Do not overengineer the MVP.
-- Do not rewrite large areas without justification.
-- Do not assume the current implementation fully matches the intended product.
-- Do not optimize for theoretical scale at the cost of simplicity.
-- Do not add offline-first complexity unless explicitly requested.
-- Do not add attachment/file-management complexity in the MVP unless explicitly required.
-- Do not leak private user data across visibility boundaries.
-
-## Expected Claude Behavior
-
-In a new or ambiguous task, first focus on:
-1. understanding the current code,
-2. identifying gaps against the product goals,
-3. proposing a safe plan,
-4. asking only the critical unresolved questions,
-5. then implementing in small validated steps.
-
-If there is tension between the current codebase and the best product direction, explain the trade-off clearly instead of silently following the current implementation.
+- Revisar siempre el `package.json` del workspace antes de proponer comandos.
+- Revisar impacto de datos antes de tocar Prisma o migraciones.
+- Revisar dependencias cruzadas antes de tocar Docker o despliegue.
+- Reflejar en README y en este archivo cualquier cambio de arquitectura, scripts o variables.
+- Priorizar cambios pequeños, reversibles y fáciles de validar.
