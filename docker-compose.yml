@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: toppfinance
+      POSTGRES_USER: toppfinance
+      POSTGRES_PASSWORD: toppfinance
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toppfinance -d toppfinance"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://toppfinance:toppfinance@postgres:5432/toppfinance?schema=public
+      BACKUP_DIR: /app/backups
+      COOKIE_SECURE: "true"
+    volumes:
+      - ./backups:/app/backups
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

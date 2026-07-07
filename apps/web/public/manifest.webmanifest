@@ -1,0 +1,19 @@
+{
+  "name": "ToppFinance",
+  "short_name": "ToppFinance",
+  "description": "Finanzas personales y compartidas para pareja.",
+  "lang": "es-ES",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f6f2",
+  "theme_color": "#01696f",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

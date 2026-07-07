@@ -1,0 +1,33 @@
+{
+  "name": "toppfinance",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,green \"npm run dev -w @toppfinance/api\" \"npm run dev -w @toppfinance/web\"",
+    "dev:api": "npm run dev -w @toppfinance/api",
+    "dev:web": "npm run dev -w @toppfinance/web",
+    "build": "npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && npm run build -w @toppfinance/web",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "npm run build -w @toppfinance/shared && tsx prisma/seed.ts",
+    "backup": "npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && tsx scripts/backup.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "prisma": "^6.13.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}
