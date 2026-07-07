@@ -1,25 +1,43 @@
-# Backups y restauracion
+# Backups y restauración
 
-## Politica MVP
+## Política MVP
 
 - Frecuencia por defecto: semanal.
-- Retencion por defecto: 30 semanas.
-- Carpeta: `./backups`.
+- Retención por defecto: 30 semanas.
+- Carpeta en host: `./backups`.
+- Carpeta en contenedor: `/app/backups`.
 - Formato: `pg_dump --format=custom`.
+
+## Cuándo ejecutar un backup
+
+Genera una copia al menos en estos casos:
+
+- Antes de desplegar migraciones Prisma.
+- Antes de restaurar datos.
+- Antes de importaciones masivas o scripts de mantenimiento.
+- Antes de cambios manuales sobre la base de datos.
 
 ## Ejecutar backup manual
 
-Desde host:
+### Desde host
 
 ```bash
 npm run backup
 ```
 
-Desde Docker:
+### Desde Docker
 
 ```bash
 docker compose exec app npm run backup
 ```
+
+## Verificación mínima
+
+Después de cada backup, comprueba:
+
+- Que el archivo se ha generado en el directorio esperado.
+- Que la fecha y tamaño son razonables.
+- Que la política de retención no ha eliminado copias necesarias.
 
 ## Restaurar
 
@@ -33,4 +51,9 @@ docker compose exec postgres pg_restore -U toppfinance -d toppfinance /ruta/al/b
 docker compose start app
 ```
 
-Antes de restaurar, conserva una copia del estado actual.
+## Precauciones
+
+- Antes de restaurar, conserva una copia del estado actual.
+- Verifica que el backup corresponde al entorno correcto.
+- Si restauras en local desde Docker, confirma la ruta real del dump dentro del contenedor o monta el archivo en una ruta accesible.
+- Después de restaurar, valida login, flujos críticos y consistencia básica de datos.

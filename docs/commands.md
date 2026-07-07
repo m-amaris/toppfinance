@@ -39,7 +39,7 @@
 
 ## Secuencias recomendadas
 
-### Onboarding
+### Onboarding base
 
 ```bash
 npm install
@@ -49,13 +49,40 @@ npm run db:migrate
 npm run dev
 ```
 
+### Onboarding con datos iniciales
+
+```bash
+npm install
+cp .env.example .env
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+npm run dev
+```
+
 ### Validación local
 
 ```bash
-npm run lint
 npm run check
 npm run test
 npm run build
+```
+
+Si los workspaces definen `lint`, añade también `npm run lint`.
+
+### Flujo Prisma en desarrollo
+
+```bash
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+```
+
+### Flujo Prisma en despliegue
+
+```bash
+npm run build
+npm run db:deploy
 ```
 
 ### Operación de base de datos
@@ -66,3 +93,10 @@ npm run db:migrate
 npm run db:deploy
 npm run db:seed
 ```
+
+## Notas
+
+- `db:migrate` está pensado para desarrollo local.
+- `db:deploy` aplica migraciones versionadas en entornos desplegados.
+- `backup` compila `shared` y `api` antes de lanzar la tarea de copia.
+- `preview` solo aplica a `apps/web`.
