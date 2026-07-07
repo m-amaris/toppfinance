@@ -19,7 +19,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "npm run build -w @toppfinance/shared && tsx prisma/seed.ts",
-    "backup": "npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && tsx scripts/backup.ts"
+    "backup": "npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && tsx scripts/backup.ts",
+    "preview": "npm run preview -w @toppfinance/web"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

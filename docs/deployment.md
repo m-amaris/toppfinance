@@ -1,42 +1,46 @@
-# Despliegue homelab
+# Despliegue
 
-El MVP esta pensado para acceso por HTTPS mediante Tailscale. La app escucha en el puerto `3000` dentro de Docker.
+## Objetivo
 
-## Pasos
+Este documento resume el flujo mínimo de despliegue para ToppFinance y actúa como checklist operativo.
 
-1. Copia `.env.example` a `.env`.
-2. Rellena:
-   - `SEED_ADMIN_PASSWORD`
-   - `SEED_MEMBER_PASSWORD`
-   - `OPENROUTER_API_KEY`
-   - `APP_URL` con la URL HTTPS de Tailscale.
-3. Arranca:
+## Requisitos previos
 
-```bash
-docker compose up -d --build
-docker compose exec app npm run db:seed
-```
+- Variables de entorno configuradas en el entorno de destino.
+- Base de datos accesible desde la API.
+- Build local validada con `npm run build`.
+- Migraciones Prisma revisadas.
+- Backup reciente disponible antes de cambios de esquema.
 
-## Tailscale HTTPS
+## Secuencia mínima
 
-Configura Tailscale para publicar `https://...` hacia `http://localhost:3000`. Mantener `COOKIE_SECURE=true` en produccion es correcto porque el navegador ve HTTPS.
+1. Instala dependencias.
+2. Configura variables de entorno.
+3. Ejecuta `npm run build`.
+4. Ejecuta `npm run db:deploy`.
+5. Arranca o reinicia servicios.
+6. Comprueba healthcheck, login y flujos críticos.
 
-## Acceso LAN (HTTP sin Tailscale)
+## Checklist de release
 
-Para acceder desde otro dispositivo en la misma red WiFi/LAN (`http://<IP-LAN>:3000`):
+- `npm run lint` en verde.
+- `npm run check` en verde.
+- `npm run test` en verde.
+- `npm run build` en verde.
+- Migraciones revisadas y entendidas.
+- Seed revisado si afecta a entornos nuevos.
+- Rollback definido.
+- Backup verificado.
 
-1. En `.env` o `docker-compose.yml`:
-   ```env
-   COOKIE_SECURE=false
-   CORS_ORIGIN=https://toppfinance,http://localhost:5175,http://localhost:3000,http://<TU-IP-LAN>:3000
-   ```
-2. Rebuild y reinicia:
-   ```bash
-   docker compose build app && docker compose up -d
-   ```
+## Rollback
 
-> **Nota**: `COOKIE_SECURE=false` es necesario en HTTP porque los navegadores rechazan cookies `Secure` en conexiones no HTTPS. En produccion con Tailscale/HTTPS, usa `COOKIE_SECURE=true`.
+Ante una incidencia grave:
 
-## Backups
+1. Detén el despliegue.
+2. Revierte a la versión anterior de aplicación.
+3. Evalúa si hace falta rollback de datos o restauración desde backup.
+4. Documenta el incidente y el impacto.
 
-Los backups se guardan en `./backups` del proyecto y se montan como `/app/backups` en el contenedor.
+## Notas
+
+Si usas Docker, el comando de arranque base es `docker compose up --build`. Ajusta puertos, secretos y persistencia según el entorno real.
