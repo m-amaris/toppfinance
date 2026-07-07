@@ -8,7 +8,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   SESSION_COOKIE_NAME: z.string().min(1).default('toppfinance_session'),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(365),
-  COOKIE_SECURE: z.coerce.boolean().default(true),
+  COOKIE_SECURE: z.enum(['true', 'false']).transform(v => v === 'true').default('true'),
   CORS_ORIGIN: z.string().default('http://localhost:5175'),
   BACKUP_DIR: z.string().default('./backups'),
   BACKUP_RETENTION_WEEKS: z.coerce.number().int().positive().default(30),

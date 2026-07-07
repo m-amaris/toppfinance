@@ -34,7 +34,9 @@ app.setErrorHandler((error, request, reply) => {
   if (error instanceof Error) {
     message = error.message
   }
-  const statusCode = ('statusCode' in error && typeof (error as any).statusCode === 'number' ? (error as any).statusCode : 500)
+  const statusCode = (typeof error === 'object' && error !== null && 'statusCode' in error && typeof (error as Record<string, unknown>).statusCode === 'number'
+      ? (error as Record<string, unknown>).statusCode
+      : 500)
 
   // If the error is a validation error from zod, we want to send 400
   if (error instanceof z.ZodError) {
@@ -47,7 +49,7 @@ app.setErrorHandler((error, request, reply) => {
     })
   }
 
-  return reply.status(statusCode).send({ error: message })
+  return reply.status(statusCode as number).send({ error: message })
 })
 
 await app.register(cookie)
@@ -659,7 +661,7 @@ if (hasWebDist) {
   await app.register(fastifyStatic, {
     root: webDist,
     prefix: '/',
-    decorateReply: false,
+    decorateReply: true,
   })
 }
 

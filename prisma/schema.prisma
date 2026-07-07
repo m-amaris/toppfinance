@@ -7,6 +7,308 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Household {
+  id            String         @id @default(cuid())
+  name          String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  accounts      Account[]
+  adminSettings AdminSetting[]
+  aiRequests    AiRequest[]
+  appLogs       AppLog[]
+  auditLogs     AuditLog[]
+  backups       BackupRun[]
+  budgets       Budget[]
+  categories    Category[]
+  imports       ImportBatch[]
+  merchants     Merchant[]
+  tags          Tag[]
+  transactions  Transaction[]
+  users         User[]
+}
+
+model User {
+  id                  String                   @id @default(cuid())
+  householdId         String
+  email               String                   @unique
+  displayName         String
+  role                UserRole                 @default(MEMBER)
+  passwordHash        String
+  active              Boolean                  @default(true)
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  ownedAccounts       Account[]
+  aiRequests          AiRequest[]
+  auditLogs           AuditLog[]
+  sessions            Session[]
+  createdTransactions Transaction[]            @relation("CreatedBy")
+  paidTransactions    Transaction[]            @relation("PaidBy")
+  beneficiaries       TransactionBeneficiary[]
+  household           Household                @relation(fields: [householdId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  userAgent  String?
+  ipHash     String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastSeenAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Account {
+  id                      String         @id @default(cuid())
+  householdId             String
+  ownerUserId             String?
+  name                    String
+  type                    AccountType
+  visibility              Visibility
+  openingBalance          Decimal        @default(0) @db.Decimal(14, 2)
+  currency                String         @default("EUR")
+  archived                Boolean        @default(false)
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  household               Household      @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  ownerUser               User?          @relation(fields: [ownerUserId], references: [id])
+  entries                 AccountEntry[]
+  destinationTransactions Transaction[]  @relation("DestinationAccount")
+  sourceTransactions      Transaction[]  @relation("SourceAccount")
+
+  @@index([householdId])
+  @@index([ownerUserId])
+}
+
+model Category {
+  id           String           @id @default(cuid())
+  householdId  String
+  type         TransactionType
+  slug         String
+  name         String
+  icon         String
+  color        String
+  archived     Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  budgetItems  BudgetCategory[]
+  household    Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([householdId, slug])
+  @@index([householdId, type])
+}
+
+model Merchant {
+  id             String        @id @default(cuid())
+  householdId    String
+  name           String
+  normalizedName String
+  createdAt      DateTime      @default(now())
+  household      Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  transactions   Transaction[]
+
+  @@unique([householdId, normalizedName])
+}
+
+model Tag {
+  id           String           @id @default(cuid())
+  householdId  String
+  name         String
+  createdAt    DateTime         @default(now())
+  household    Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  transactions TransactionTag[]
+
+  @@unique([householdId, name])
+}
+
+model Transaction {
+  id                   String                   @id @default(cuid())
+  householdId          String
+  type                 TransactionType
+  date                 DateTime
+  amount               Decimal                  @db.Decimal(14, 2)
+  currency             String                   @default("EUR")
+  description          String
+  categoryId           String
+  merchantId           String?
+  sourceAccountId      String?
+  destinationAccountId String?
+  visibility           Visibility
+  paidByUserId         String?
+  createdByUserId      String
+  notes                String?
+  importBatchId        String?
+  sourceHash           String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  accountEntries       AccountEntry[]
+  category             Category                 @relation(fields: [categoryId], references: [id])
+  createdByUser        User                     @relation("CreatedBy", fields: [createdByUserId], references: [id])
+  destinationAccount   Account?                 @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+  household            Household                @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  importBatch          ImportBatch?             @relation(fields: [importBatchId], references: [id])
+  merchant             Merchant?                @relation(fields: [merchantId], references: [id])
+  paidByUser           User?                    @relation("PaidBy", fields: [paidByUserId], references: [id])
+  sourceAccount        Account?                 @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  beneficiaries        TransactionBeneficiary[]
+  tags                 TransactionTag[]
+
+  @@index([householdId, date])
+  @@index([householdId, visibility])
+  @@index([sourceHash])
+}
+
+model TransactionBeneficiary {
+  transactionId String
+  userId        String
+  percent       Decimal     @db.Decimal(5, 2)
+  amount        Decimal?    @db.Decimal(14, 2)
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([transactionId, userId])
+}
+
+model TransactionTag {
+  transactionId String
+  tagId         String
+  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@id([transactionId, tagId])
+}
+
+model AccountEntry {
+  id            String      @id @default(cuid())
+  transactionId String
+  accountId     String
+  amount        Decimal     @db.Decimal(14, 2)
+  createdAt     DateTime    @default(now())
+  account       Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([transactionId])
+}
+
+model Budget {
+  id          String           @id @default(cuid())
+  householdId String
+  month       String
+  scope       BudgetScope
+  ownerUserId String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  household   Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  categories  BudgetCategory[]
+
+  @@unique([householdId, month, scope, ownerUserId])
+  @@index([householdId, month])
+}
+
+model BudgetCategory {
+  id          String   @id @default(cuid())
+  budgetId    String
+  categoryId  String
+  limitAmount Decimal  @db.Decimal(14, 2)
+  budget      Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([budgetId, categoryId])
+}
+
+model ImportBatch {
+  id            String        @id @default(cuid())
+  householdId   String
+  importedById  String
+  fileName      String
+  status        ImportStatus
+  warningsCount Int           @default(0)
+  rowsCount     Int           @default(0)
+  createdAt     DateTime      @default(now())
+  committedAt   DateTime?
+  household     Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  householdId String
+  actorUserId String?
+  entity      String
+  entityId    String?
+  action      String
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  actor       User?     @relation(fields: [actorUserId], references: [id])
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, createdAt])
+}
+
+model AppLog {
+  id          String      @id @default(cuid())
+  householdId String?
+  level       LogLevel
+  category    LogCategory
+  message     String
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+  household   Household?  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, createdAt])
+  @@index([level, category])
+}
+
+model AdminSetting {
+  id          String    @id @default(cuid())
+  householdId String
+  key         String
+  value       Json
+  updatedAt   DateTime  @updatedAt
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, key])
+}
+
+model BackupRun {
+  id          String       @id @default(cuid())
+  householdId String?
+  status      BackupStatus
+  filePath    String?
+  sizeBytes   BigInt?
+  checksum    String?
+  error       String?
+  startedAt   DateTime     @default(now())
+  finishedAt  DateTime?
+  household   Household?   @relation(fields: [householdId], references: [id])
+}
+
+model AiRequest {
+  id             String    @id @default(cuid())
+  householdId    String
+  userId         String
+  feature        String
+  modelRequested String
+  modelUsed      String?
+  promptTokens   Int?
+  outputTokens   Int?
+  latencyMs      Int?
+  status         String
+  error          String?
+  createdAt      DateTime  @default(now())
+  household      Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, createdAt])
+}
+
 enum UserRole {
   ADMIN
   MEMBER
@@ -64,306 +366,4 @@ enum BackupStatus {
   STARTED
   SUCCESS
   FAILED
-}
-
-model Household {
-  id             String          @id @default(cuid())
-  name           String
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  users          User[]
-  accounts       Account[]
-  categories     Category[]
-  merchants      Merchant[]
-  tags           Tag[]
-  transactions   Transaction[]
-  budgets        Budget[]
-  imports        ImportBatch[]
-  appLogs        AppLog[]
-  auditLogs      AuditLog[]
-  adminSettings  AdminSetting[]
-  backups        BackupRun[]
-  aiRequests     AiRequest[]
-}
-
-model User {
-  id                    String                   @id @default(cuid())
-  householdId           String
-  email                 String                   @unique
-  displayName           String
-  role                  UserRole                 @default(MEMBER)
-  passwordHash          String
-  active                Boolean                  @default(true)
-  createdAt             DateTime                 @default(now())
-  updatedAt             DateTime                 @updatedAt
-  household             Household                @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  sessions              Session[]
-  ownedAccounts         Account[]
-  paidTransactions      Transaction[]            @relation("PaidBy")
-  createdTransactions   Transaction[]            @relation("CreatedBy")
-  beneficiaries         TransactionBeneficiary[]
-  auditLogs             AuditLog[]
-  aiRequests            AiRequest[]
-}
-
-model Session {
-  id          String    @id @default(cuid())
-  userId      String
-  tokenHash   String    @unique
-  userAgent   String?
-  ipHash      String?
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  lastSeenAt  DateTime  @default(now())
-  createdAt   DateTime  @default(now())
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([expiresAt])
-}
-
-model Account {
-  id                      String          @id @default(cuid())
-  householdId             String
-  ownerUserId             String?
-  name                    String
-  type                    AccountType
-  visibility              Visibility
-  openingBalance          Decimal         @default(0) @db.Decimal(14, 2)
-  currency                String          @default("EUR")
-  archived                Boolean         @default(false)
-  createdAt               DateTime        @default(now())
-  updatedAt               DateTime        @updatedAt
-  household               Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  ownerUser               User?           @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
-  sourceTransactions      Transaction[]   @relation("SourceAccount")
-  destinationTransactions Transaction[]   @relation("DestinationAccount")
-  entries                 AccountEntry[]
-
-  @@index([householdId])
-  @@index([ownerUserId])
-}
-
-model Category {
-  id            String           @id @default(cuid())
-  householdId   String
-  type          TransactionType
-  slug          String
-  name          String
-  icon          String
-  color         String
-  archived      Boolean          @default(false)
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  household     Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  transactions  Transaction[]
-  budgetItems   BudgetCategory[]
-
-  @@unique([householdId, slug])
-  @@index([householdId, type])
-}
-
-model Merchant {
-  id             String        @id @default(cuid())
-  householdId    String
-  name           String
-  normalizedName String
-  createdAt      DateTime      @default(now())
-  household      Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  transactions   Transaction[]
-
-  @@unique([householdId, normalizedName])
-}
-
-model Tag {
-  id           String           @id @default(cuid())
-  householdId  String
-  name         String
-  createdAt    DateTime         @default(now())
-  household    Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  transactions TransactionTag[]
-
-  @@unique([householdId, name])
-}
-
-model Transaction {
-  id                   String                   @id @default(cuid())
-  householdId          String
-  type                 TransactionType
-  date                 DateTime
-  amount               Decimal                  @db.Decimal(14, 2)
-  currency             String                   @default("EUR")
-  description          String
-  categoryId           String
-  merchantId           String?
-  sourceAccountId      String?
-  destinationAccountId String?
-  visibility           Visibility
-  paidByUserId         String?
-  createdByUserId      String
-  notes                String?
-  importBatchId        String?
-  sourceHash           String?
-  createdAt            DateTime                 @default(now())
-  updatedAt            DateTime                 @updatedAt
-  household            Household                @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  category             Category                 @relation(fields: [categoryId], references: [id])
-  merchant             Merchant?                @relation(fields: [merchantId], references: [id], onDelete: SetNull)
-  sourceAccount        Account?                 @relation("SourceAccount", fields: [sourceAccountId], references: [id], onDelete: SetNull)
-  destinationAccount   Account?                 @relation("DestinationAccount", fields: [destinationAccountId], references: [id], onDelete: SetNull)
-  paidByUser           User?                    @relation("PaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
-  createdByUser        User                     @relation("CreatedBy", fields: [createdByUserId], references: [id])
-  importBatch          ImportBatch?             @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  beneficiaries        TransactionBeneficiary[]
-  tags                 TransactionTag[]
-  accountEntries       AccountEntry[]
-
-  @@index([householdId, date])
-  @@index([householdId, visibility])
-  @@index([sourceHash])
-}
-
-model TransactionBeneficiary {
-  transactionId String
-  userId        String
-  percent       Decimal     @db.Decimal(5, 2)
-  amount        Decimal?    @db.Decimal(14, 2)
-  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@id([transactionId, userId])
-}
-
-model TransactionTag {
-  transactionId String
-  tagId         String
-  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
-
-  @@id([transactionId, tagId])
-}
-
-model AccountEntry {
-  id            String      @id @default(cuid())
-  transactionId String
-  accountId     String
-  amount        Decimal     @db.Decimal(14, 2)
-  createdAt     DateTime    @default(now())
-  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  account       Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@index([accountId])
-  @@index([transactionId])
-}
-
-model Budget {
-  id           String           @id @default(cuid())
-  householdId  String
-  month        String
-  scope        BudgetScope
-  ownerUserId  String?
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  household    Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  categories   BudgetCategory[]
-
-  @@unique([householdId, month, scope, ownerUserId])
-  @@index([householdId, month])
-}
-
-model BudgetCategory {
-  id          String   @id @default(cuid())
-  budgetId    String
-  categoryId  String
-  limitAmount Decimal  @db.Decimal(14, 2)
-  budget      Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-  @@unique([budgetId, categoryId])
-}
-
-model ImportBatch {
-  id             String        @id @default(cuid())
-  householdId    String
-  importedById   String
-  fileName       String
-  status         ImportStatus
-  warningsCount  Int           @default(0)
-  rowsCount      Int           @default(0)
-  createdAt      DateTime      @default(now())
-  committedAt    DateTime?
-  household      Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  transactions   Transaction[]
-}
-
-model AuditLog {
-  id          String      @id @default(cuid())
-  householdId String
-  actorUserId String?
-  entity      String
-  entityId    String?
-  action      String
-  metadata    Json?
-  createdAt   DateTime    @default(now())
-  household   Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  actor       User?       @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
-
-  @@index([householdId, createdAt])
-}
-
-model AppLog {
-  id          String      @id @default(cuid())
-  householdId String?
-  level       LogLevel
-  category    LogCategory
-  message     String
-  metadata    Json?
-  createdAt   DateTime    @default(now())
-  household   Household?  @relation(fields: [householdId], references: [id], onDelete: Cascade)
-
-  @@index([householdId, createdAt])
-  @@index([level, category])
-}
-
-model AdminSetting {
-  id          String     @id @default(cuid())
-  householdId String
-  key         String
-  value       Json
-  updatedAt   DateTime   @updatedAt
-  household   Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
-
-  @@unique([householdId, key])
-}
-
-model BackupRun {
-  id          String       @id @default(cuid())
-  householdId String?
-  status      BackupStatus
-  filePath    String?
-  sizeBytes   BigInt?
-  checksum    String?
-  error       String?
-  startedAt   DateTime     @default(now())
-  finishedAt  DateTime?
-  household   Household?   @relation(fields: [householdId], references: [id], onDelete: SetNull)
-}
-
-model AiRequest {
-  id             String     @id @default(cuid())
-  householdId    String
-  userId         String
-  feature        String
-  modelRequested String
-  modelUsed      String?
-  promptTokens   Int?
-  outputTokens   Int?
-  latencyMs      Int?
-  status         String
-  error          String?
-  createdAt      DateTime   @default(now())
-  household      Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([householdId, createdAt])
 }

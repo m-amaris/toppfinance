@@ -19,6 +19,8 @@ DATABASE_URL=postgresql://toppfinance:toppfinance@localhost:5432/toppfinance?sch
 COOKIE_SECURE=false
 ```
 
+> **Acceso desde otro dispositivo (LAN)**: El `.env.example` ya incluye `CORS_ORIGIN` con IPs comunes (192.168.x.x, 100.x.x.x Tailscale). Si tu IP es distinta, agregala a `CORS_ORIGIN` en `.env` y reinicia `npm run dev:api`.
+
 ## Arranque
 
 ```bash
