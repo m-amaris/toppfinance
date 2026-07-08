@@ -93,6 +93,9 @@ export {
   apiErrorSchema,
   apiSuccessSchema,
   paginatedResponseSchema,
+  entityIdParamsSchema,
+  aiInsightsBodySchema,
+  adminChangePasswordBodySchema,
   DEFAULT_CATEGORIES,
   DEFAULT_SHARED_SPLIT,
   DEFAULT_CURRENCY,
@@ -144,6 +147,9 @@ export type {
   ApiError,
   ApiErrorDetails,
   DefaultCategory,
+  EntityIdParams,
+  AiInsightsBody,
+  AdminChangePasswordBody,
   LocalTransactionType,
   CategoryGroup,
   AccountForUI,
@@ -247,6 +253,7 @@ export type { SplitUser, SharedSplitConfig, TransactionSplitRequirement } from '
 
 // ─── CSV import utilities ─────────────────────────────────────────────────────
 export {
+  csvCommitParamsSchema,
   CSV_COLUMN_ALIASES,
   TRANSACTION_TYPE_LABELS,
   FALLBACK_CATEGORY_BY_TYPE,

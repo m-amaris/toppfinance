@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { Visibility } from '@prisma/client'
 import { parse } from 'csv-parse/sync'
-import { z } from 'zod'
 import {
   accountVisibilityWhere,
   assertSplitTotal,
@@ -9,6 +8,7 @@ import {
   CSV_COLUMN_ALIASES,
   createTransactionSchema,
   csvCommitBodySchema as sharedCsvCommitBodySchema,
+  csvCommitParamsSchema,
   csvPreviewBodySchema as sharedCsvPreviewBodySchema,
   dateOnly,
   defaultSplits,
@@ -29,7 +29,7 @@ import {
   TRANSACTION_TYPE_LABELS,
 } from '@toppfinance/shared'
 import { requireAuth } from './auth.js'
-import type { AuthUser } from '@toppfinance/shared'
+import type { AuthUser, ImportDraft } from '@toppfinance/shared'
 import { prisma } from './db.js'
 import { auditLog } from './logging.js'
 
@@ -38,7 +38,6 @@ export const csvPreviewBodySchema = sharedCsvPreviewBodySchema
 export const csvCommitBodySchema = sharedCsvCommitBodySchema
 
 type CsvRecord = Record<string, unknown>
-type ImportDraft = z.infer<typeof createTransactionSchema>
 
 async function buildPreviewRows(input: {
   user: AuthUser
@@ -415,7 +414,7 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
 
   app.post('/api/imports/csv/:id/commit', { preHandler: requireAuth }, async (request, reply) => {
     const user = request.user!
-    const params = z.object({ id: z.string().min(1) }).parse(request.params)
+    const params = csvCommitParamsSchema.parse(request.params)
     const body = sharedCsvCommitBodySchema.parse(request.body)
 
     const importBatch = await prisma.importBatch.findFirst({

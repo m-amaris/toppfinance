@@ -42,6 +42,13 @@ export type CsvRecord = Record<string, unknown>;
 export type ImportDraft = CreateTransactionInput;
 
 /**
+ * CSV commit route params schema.
+ */
+export const csvCommitParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+/**
  * CSV preview row result.
  */
 export interface CsvPreviewRow {

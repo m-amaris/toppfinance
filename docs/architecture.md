@@ -63,8 +63,9 @@ Para mantener el contrato entre capas realmente único, se aplican las siguiente
 
 - TODO esquema Zod que valide datos compartidos entre API y frontend **debe** definirse en `packages/shared/src/schemas.ts`.
 - Los esquemas de dominio específico (CSV, config, etc.) pueden vivir en su propio módulo dentro de `packages/shared/src/` (ej: `csv.ts`, `config.ts`).
-- **Nunca** se debe importar `zod` directamente en `apps/api/` o `apps/web/` para definir esquemas compartidos. El uso de `z.object({...})` inline para parsear parámetros de ruta está permitido (es lógica de controlador, no contrato compartido).
-- `zod` solo aparece como dependencia directa en `packages/shared/package.json`.
+- **Nunca** se debe importar `zod` directamente en `apps/api/` o `apps/web/` para definir esquemas compartidos. Tampoco se permite `z.object({...})` inline para parsear parámetros de ruta: usa `entityIdParamsSchema` o el schema específico desde `@toppfinance/shared`.
+- **Nunca** uses `z.infer<typeof ...>` fuera de `packages/shared/src/types.ts`. Importa el tipo derivado desde `@toppfinance/shared`.
+- `zod` solo aparece como dependencia directa en `packages/shared/package.json`. La única excepción es `error instanceof z.ZodError` en el manejador global de errores (infraestructura, no contrato).
 
 ### Tipos Request/Response solo en packages/shared
 
@@ -84,6 +85,8 @@ El script `scripts/check-contracts.mjs` verifica estas reglas:
 1. No hay `import { z } from 'zod'` fuera de `packages/shared/src/`.
 2. No hay `require('@toppfinance/shared')` (debe usarse `import`).
 3. No hay funciones compartidas importadas desde módulos locales (`./finance`, etc.) cuando existen en `@toppfinance/shared`.
+4. No hay `z.object({...})` inline fuera de `packages/shared/src/schemas.ts`, `csv.ts` o `config.ts`.
+5. No hay `z.infer<typeof ...>` fuera de `packages/shared/src/types.ts`.
 
 Ejecutar con `npm run check:contracts`. Está integrado en el flujo de CI/validación.
 

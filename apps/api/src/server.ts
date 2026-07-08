@@ -15,6 +15,9 @@ import {
   transactionFiltersSchema,
   updateTransactionSchema,
   updateCategorySchema,
+	entityIdParamsSchema,
+	aiInsightsBodySchema,
+	adminChangePasswordBodySchema,
 } from '@toppfinance/shared'
 import { anonymizeTransactions, callOpenRouter, defaultAiSettings } from './ai.js'
 import { clearSessionCookie, requireAdmin, requireAuth, setSessionCookie } from './auth.js'
@@ -202,7 +205,7 @@ app.get('/api/categories', { preHandler: requireAuth }, async request => {
 
 app.patch('/api/categories/:id', { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
-  const params = z.object({ id: z.string() }).parse(request.params)
+  const params = entityIdParamsSchema.parse(request.params)
   const body = updateCategorySchema.parse(request.body)
 
   const category = await prisma.category.findFirst({ where: { id: params.id, householdId: user.householdId } })
@@ -474,7 +477,7 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
 
 app.patch('/api/transactions/:id', { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
-  const params = z.object({ id: z.string() }).parse(request.params)
+  const params = entityIdParamsSchema.parse(request.params)
   const body = updateTransactionSchema.parse(request.body)
   if (body.beneficiarySplits) assertSplitTotal(body.beneficiarySplits)
 
@@ -531,7 +534,7 @@ app.patch('/api/transactions/:id', { preHandler: requireAuth }, async (request, 
 
 app.delete('/api/transactions/:id', { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
-  const params = z.object({ id: z.string() }).parse(request.params)
+  const params = entityIdParamsSchema.parse(request.params)
   const existing = await prisma.transaction.findFirst({
     where: { id: params.id, ...transactionVisibilityWhere(user.id, user.householdId) },
   })
@@ -544,7 +547,7 @@ app.delete('/api/transactions/:id', { preHandler: requireAuth }, async (request,
 
 app.post('/api/ai/insights', { preHandler: requireAuth }, async request => {
   const user = request.user!
-  const body = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional() }).parse(request.body ?? {})
+  const body = aiInsightsBodySchema.parse(request.body ?? {})
   const settings = await getSetting(user.householdId, 'aiSettings', defaultAiSettings())
   const from = body.month ? `${body.month}-01` : undefined
   const rawTransactions = await prisma.transaction.findMany({
@@ -643,8 +646,8 @@ app.get('/api/admin/users', { preHandler: requireAdmin }, async request => {
 
 app.patch('/api/admin/users/:id/password', { preHandler: requireAdmin }, async (request, reply) => {
   const actor = request.user!
-  const params = z.object({ id: z.string() }).parse(request.params)
-  const body = z.object({ password: z.string().min(12) }).parse(request.body)
+  const params = entityIdParamsSchema.parse(request.params)
+  const body = adminChangePasswordBodySchema.parse(request.body)
   const target = await prisma.user.findFirst({ where: { id: params.id, householdId: actor.householdId } })
   if (!target) return reply.code(404).send({ error: 'Usuario no encontrado' })
 

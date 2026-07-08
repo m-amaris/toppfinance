@@ -402,6 +402,24 @@ export const paginatedResponseSchema = <T extends z.ZodTypeAny>(itemSchema: T) =
 
 /**
  * ===========================================
+ * Generic route schemas (params, bodies)
+ * ===========================================
+ */
+
+export const entityIdParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const aiInsightsBodySchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+});
+
+export const adminChangePasswordBodySchema = z.object({
+  password: z.string().min(12),
+});
+
+/**
+ * ===========================================
  * Default values / constants
  * ===========================================
  */

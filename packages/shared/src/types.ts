@@ -166,6 +166,15 @@ export type ExportCsvRow = z.infer<typeof schemas.exportCsvRowSchema>;
 
 /**
  * ===========================================
+ * Generic route types (params, bodies)
+ * ===========================================
+ */
+export type EntityIdParams = z.infer<typeof schemas.entityIdParamsSchema>;
+export type AiInsightsBody = z.infer<typeof schemas.aiInsightsBodySchema>;
+export type AdminChangePasswordBody = z.infer<typeof schemas.adminChangePasswordBodySchema>;
+
+/**
+ * ===========================================
  * Response envelope types
  * ===========================================
  */

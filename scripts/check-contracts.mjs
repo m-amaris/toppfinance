@@ -22,6 +22,11 @@ const ALLOWED_ZOD_FILES = new Set([
   `${ROOT}packages/shared/src/config.ts`,
 ])
 
+// Files where z.infer<typeof ...> is allowed (type derivation from schemas)
+const ALLOWED_ZOD_INFER_FILES = new Set([
+  `${ROOT}packages/shared/src/types.ts`,
+])
+
 // Shared functions that MUST NOT be re-exported from API layers
 const SHARED_FUNCTIONS = new Set([
   'accountVisibilityWhere',
@@ -88,9 +93,10 @@ function checkFile(filePath) {
   }
 }
 
-// Walk all .ts files outside shared
+// Walk all .ts files outside shared, PLUS shared types.ts for infer checks
 const apiFiles = globSync(`${ROOT}apps/api/src/**/*.ts`)
-const allFiles = [...apiFiles]
+const sharedSrcFiles = globSync(`${ROOT}packages/shared/src/**/*.ts`)
+const allFiles = [...apiFiles, ...sharedSrcFiles]
 
 for (const file of allFiles) {
   checkFile(file)
@@ -133,6 +139,40 @@ for (const file of allFiles) {
   for (let i = 0; i < lines.length; i++) {
     if (/require\s*\(\s*['"]@toppfinance\/shared['"]\s*\)/.test(lines[i])) {
       error(relative, `Line ${i + 1}: synchronous require() of @toppfinance/shared - use a top-level import instead`)
+    }
+  }
+}
+
+// --- Check 4: No z.object(...) outside shared ---
+console.log('\n🔍 Checking for inline z.object() outside packages/shared ...')
+
+for (const file of allFiles) {
+  const content = readFileSync(file, 'utf-8')
+  const lines = content.split('\n')
+  const relative = file.replace(ROOT, '')
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/z\.object\s*\(/.test(lines[i])) {
+      if (!ALLOWED_ZOD_FILES.has(file)) {
+        error(relative, `Line ${i + 1}: inline z.object() found — move schema to packages/shared/src/schemas.ts and import the named schema`)
+      }
+    }
+  }
+}
+
+// --- Check 5: No z.infer<...> outside shared ---
+console.log('\n🔍 Checking for z.infer<> outside packages/shared ...')
+
+for (const file of allFiles) {
+  const content = readFileSync(file, 'utf-8')
+  const lines = content.split('\n')
+  const relative = file.replace(ROOT, '')
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/z\.infer\s*</.test(lines[i])) {
+      if (!ALLOWED_ZOD_INFER_FILES.has(file)) {
+        error(relative, `Line ${i + 1}: z.infer<> found — import the derived type from '@toppfinance/shared' instead`)
+      }
     }
   }
 }
