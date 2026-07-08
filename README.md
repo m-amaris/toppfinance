@@ -76,6 +76,7 @@ Si no necesitas datos iniciales, puedes omitir `npm run db:seed`.
 - `db:seed`: `npm run build -w @toppfinance/shared && tsx prisma/seed.ts`
 - `backup`: `npm run build -w @toppfinance/shared && npm run build -w @toppfinance/api && tsx scripts/backup.ts`
 - `preview`: `npm run preview -w @toppfinance/web`
+- `check:contracts`: `node scripts/check-contracts.mjs`
 
 ## Workspaces
 
@@ -158,12 +159,23 @@ npm run db:deploy
 Antes de abrir una PR o desplegar, ejecuta este bloque como mínimo:
 
 ```bash
+npm run check:contracts
 npm run check
 npm run test
 npm run build
 ```
 
 Si cada workspace incorpora `lint`, añade también `npm run lint` al bloque de validación.
+
+## Contratos compartidos
+
+ToppFinance sigue una regla estricta de contratos: **Zod, tipos Request/Response, enums, helpers monetarios y de fechas compartidos viven exclusivamente en `packages/shared/src/`**.
+
+- Los esquemas Zod se definen en `packages/shared/src/schemas.ts` (o módulos de dominio en shared).
+- Los tipos se derivan de los esquemas en `packages/shared/src/types.ts`.
+- Las capas de aplicación (`apps/api`, `apps/web`) importan desde `@toppfinance/shared`.
+- El script `npm run check:contracts` verifica automáticamente el cumplimiento.
+- Consulta `docs/architecture.md` para el detalle completo.
 
 ## Docker
 

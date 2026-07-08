@@ -20,6 +20,7 @@ Este documento resume cómo trabajar en **toppfinance** desde Claude Code y mant
 - `test`: `npm run test --workspaces --if-present`
 - `check`: `npm run check --workspaces --if-present`
 - `lint`: `npm run lint --workspaces --if-present`
+- `check:contracts`: `node scripts/check-contracts.mjs`
 - `db:generate`: `prisma generate`
 - `db:migrate`: `prisma migrate dev`
 - `db:deploy`: `prisma migrate deploy`
@@ -34,6 +35,19 @@ Este documento resume cómo trabajar en **toppfinance** desde Claude Code y mant
 | `apps/api` | `@toppfinance/api` | dev, build, start, test, check |
 | `apps/web` | `@toppfinance/web` | dev, build, preview, test, check |
 | `packages/shared` | `@toppfinance/shared` | build, check |
+
+## Regla de contratos compartidos
+
+**Zod, tipos Request/Response, enums, helpers monetarios y de fechas compartidos viven exclusivamente en `packages/shared/src/`.**
+
+- Todo esquema Zod que valide datos entre API y frontend se define en `packages/shared/src/schemas.ts` (o un módulo de dominio en shared).
+- `zod` no se importa directamente en `apps/api/` o `apps/web/` salvo para `z.object({...})` inline en parámetros de ruta.
+- Los tipos `*Input`, `*Response`, `*Body` se definen en `packages/shared/src/types.ts`.
+- Toda lógica monetaria reutilizable (redondeo, formato, aritmética) sale de `packages/shared/src/money.ts`.
+- Toda lógica de fechas reutilizable sale de `packages/shared/src/date.ts`.
+- Las capas de aplicación importan desde `@toppfinance/shared`, no duplican ni re-exportan desde módulos locales.
+- El script `scripts/check-contracts.mjs` verifica automáticamente estas reglas (`npm run check:contracts`).
+- Consulta `docs/architecture.md` para el detalle completo de la regla.
 
 ## Flujo de trabajo
 

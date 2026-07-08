@@ -13,6 +13,13 @@ import {
   CATEGORIAS_EDITABLES_INICIALES,
   patrimonioMensual as patrimonioMensualInicial,
 } from '../data/store.js'
+import {
+  currentMonthKey,
+  localizeCategoryName,
+  mapApiCategory,
+  monthKeyFromDate,
+  toMoney,
+} from '@toppfinance/shared'
 
 export const FinanzasContext = createContext(null)
 
@@ -46,20 +53,6 @@ function getInitialDarkMode() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
-function pad(n) {
-  return String(n).padStart(2, '0')
-}
-
-function currentMonthKey() {
-  const d = new Date()
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
-}
-
-function monthKeyFromDate(date) {
-  const d = new Date(date + 'T12:00:00')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
-}
-
 function categoryTypeFromId(id) {
   if (gastoIdsBase.includes(id)) return 'EXPENSE'
   if (ingresoIdsBase.includes(id)) return 'INCOME'
@@ -67,28 +60,6 @@ function categoryTypeFromId(id) {
   if (transferenciaIdsBase.includes(id)) return 'TRANSFER'
   if (ajusteIdsBase.includes(id)) return 'ADJUSTMENT'
   return null
-}
-
-function localizeCategoryName(name) {
-  const replacements = {
-    Alimentacion: 'Alimentación',
-    Nomina: 'Nómina',
-    Educacion: 'Educación',
-    'Otros ingresos': 'Otros',
-    'Transferencia interna': 'Transferencia interna',
-  }
-  return replacements[name] || name
-}
-
-function mapApiCategory(category) {
-  return {
-    id: category.slug,
-    apiId: category.id,
-    label: localizeCategoryName(category.name),
-    icon: category.icon,
-    color: category.color,
-    type: category.type,
-  }
 }
 
 function accountStyle(account, index) {

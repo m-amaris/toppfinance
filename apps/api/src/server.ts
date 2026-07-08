@@ -21,8 +21,16 @@ import { clearSessionCookie, requireAdmin, requireAuth, setSessionCookie } from 
 import { runBackup } from './backup.js'
 import { config, corsOrigins } from './config.js'
 import { registerCsvImportRoutes } from './csvImport.js'
+import { accountWithBalance } from './finance.js'
 import { prisma } from './db.js'
-import { accountVisibilityWhere, accountWithBalance, assertSplitTotal, buildAccountEntries, dateOnly, toMoney, transactionVisibilityWhere } from './finance.js'
+import {
+  accountVisibilityWhere,
+  assertSplitTotal,
+  buildAccountEntries,
+  dateOnly,
+  toMoney,
+  transactionVisibilityWhere,
+} from '@toppfinance/shared'
 import { appLog, auditLog } from './logging.js'
 import { createSessionToken, hashIp, hashPassword, hashToken, LogLevel, LogCategory, verifyPassword } from '@toppfinance/shared'
 

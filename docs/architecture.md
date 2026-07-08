@@ -55,6 +55,38 @@ Capa de persistencia con esquema, migraciones y seed. Archivo detectado: `prisma
 - `docs`: documentación operativa y de arquitectura.
 - `scripts`: tareas de mantenimiento que no pertenecen a un workspace concreto.
 
+## Reglas de contratos compartidos
+
+Para mantener el contrato entre capas realmente único, se aplican las siguientes reglas:
+
+### Zod solo en packages/shared
+
+- TODO esquema Zod que valide datos compartidos entre API y frontend **debe** definirse en `packages/shared/src/schemas.ts`.
+- Los esquemas de dominio específico (CSV, config, etc.) pueden vivir en su propio módulo dentro de `packages/shared/src/` (ej: `csv.ts`, `config.ts`).
+- **Nunca** se debe importar `zod` directamente en `apps/api/` o `apps/web/` para definir esquemas compartidos. El uso de `z.object({...})` inline para parsear parámetros de ruta está permitido (es lógica de controlador, no contrato compartido).
+- `zod` solo aparece como dependencia directa en `packages/shared/package.json`.
+
+### Tipos Request/Response solo en packages/shared
+
+- Todos los tipos `*Input`, `*Response`, `*Body` que representen el contrato entre API y frontend se definen en `packages/shared/src/types.ts` (derivados de esquemas Zod) o `packages/shared/src/auth.ts` (tipos de sesión/autenticación no derivables).
+- No debe haber tipos Request/Response duplicados en `apps/api/` o `apps/web/`.
+- Las excepciones son tipos puramente de UI (ej: `AccountForUI`, `TransactionForUI`) que residen en `packages/shared/src/types.ts` cuando se reutilizan entre hooks y componentes.
+
+### Helpers monetarios y de fechas centralizados
+
+- Toda lógica de redondeo, formateo y aritmética monetaria reutilizable **debe** salir de `packages/shared/src/money.ts`.
+- Toda lógica de manipulación de fechas (formatos ISO, claves de mes, rangos) **debe** salir de `packages/shared/src/date.ts`.
+- Las capas de aplicación pueden importar estos helpers desde `@toppfinance/shared`, no duplicarlos localmente.
+
+### Verificación automática
+
+El script `scripts/check-contracts.mjs` verifica estas reglas:
+1. No hay `import { z } from 'zod'` fuera de `packages/shared/src/`.
+2. No hay `require('@toppfinance/shared')` (debe usarse `import`).
+3. No hay funciones compartidas importadas desde módulos locales (`./finance`, etc.) cuando existen en `@toppfinance/shared`.
+
+Ejecutar con `npm run check:contracts`. Está integrado en el flujo de CI/validación.
+
 ## Deuda detectada en baseline
 
 - El punto de entrada documental no explica el flujo completo de onboarding.

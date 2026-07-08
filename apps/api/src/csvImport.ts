@@ -1,35 +1,37 @@
-import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { Visibility } from '@prisma/client'
 import { parse } from 'csv-parse/sync'
 import { z } from 'zod'
 import {
+  accountVisibilityWhere,
+  assertSplitTotal,
+  buildAccountEntries,
+  CSV_COLUMN_ALIASES,
   createTransactionSchema,
-  csvPreviewBodySchema as sharedCsvPreviewBodySchema,
   csvCommitBodySchema as sharedCsvCommitBodySchema,
-  TransactionType,
-} from '@toppfinance/shared'
-import { requireAuth } from './auth.js'
-import type { AuthUser } from '@toppfinance/shared'
-import { prisma } from './db.js'
-import { accountVisibilityWhere, assertSplitTotal, buildAccountEntries, dateOnly, toMoney } from '@toppfinance/shared'
-import { auditLog } from './logging.js'
-import {
+  csvPreviewBodySchema as sharedCsvPreviewBodySchema,
+  dateOnly,
+  defaultSplits,
+  FALLBACK_CATEGORY_BY_TYPE,
+  findAccount,
+  findCategory,
+  findUser,
+  makeSourceHash,
+  parseBeneficiarySplits,
   parseCsv,
   parseDateValue,
   parseMoney,
   parseTypeValue,
   parseVisibilityValue,
   splitTags,
-  findCategory,
-  findAccount,
-  makeSourceHash,
-  findUser,
-  parseBeneficiarySplits,
-  defaultSplits,
+  toMoney,
+  TransactionType,
   TRANSACTION_TYPE_LABELS,
-  FALLBACK_CATEGORY_BY_TYPE,
 } from '@toppfinance/shared'
+import { requireAuth } from './auth.js'
+import type { AuthUser } from '@toppfinance/shared'
+import { prisma } from './db.js'
+import { auditLog } from './logging.js'
 
 // Re-export schemas from shared (they match exactly)
 export const csvPreviewBodySchema = sharedCsvPreviewBodySchema
@@ -67,7 +69,6 @@ async function buildPreviewRows(input: {
     const errors: string[] = []
 
     // Extract raw values using shared CSV_COLUMN_ALIASES
-    const { CSV_COLUMN_ALIASES } = require('@toppfinance/shared')
     const rawDate = (record as any)[CSV_COLUMN_ALIASES.date[0]] ?? ''
     const rawAmount = (record as any)[CSV_COLUMN_ALIASES.amount[0]] ?? ''
     const rawType = (record as any)[CSV_COLUMN_ALIASES.type[0]] ?? ''

@@ -1,20 +1,12 @@
-import type { Prisma, TransactionType, Visibility } from '@prisma/client'
+import type { Prisma } from '@prisma/client'
 import { prisma } from './db.js'
-import {
-  toMoney,
-  dateOnly,
-  assertSplitTotal,
-  canSeeTransaction,
-  accountVisibilityWhere,
-  transactionVisibilityWhere,
-  buildAccountEntries,
-  calculateAccountBalance,
-  validateAccountAccess,
-  getDefaultAccountForType,
-  validateTransferAccounts,
-} from '@toppfinance/shared'
+import { toMoney } from '@toppfinance/shared'
 
-export { toMoney, dateOnly, assertSplitTotal, canSeeTransaction, accountVisibilityWhere, transactionVisibilityWhere, buildAccountEntries, calculateAccountBalance, validateAccountAccess, getDefaultAccountForType, validateTransferAccounts }
+/**
+ * API-specific account utilities.
+ * Shared utilities (toMoney, dateOnly, assertSplitTotal, visibility helpers, etc.)
+ * should be imported directly from @toppfinance/shared.
+ */
 
 export async function accountBalance(accountId: string) {
   const account = await prisma.account.findUnique({
