@@ -6,7 +6,16 @@ import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
-import { aiSettingsSchema, backupPolicySchema, createTransactionSchema, transactionFiltersSchema, updateTransactionSchema } from '@toppfinance/shared'
+import {
+  aiSettingsSchema,
+  backupPolicySchema,
+  createTransactionSchema,
+  loginBodySchema,
+  sharedSplitSchema,
+  transactionFiltersSchema,
+  updateTransactionSchema,
+  updateCategorySchema,
+} from '@toppfinance/shared'
 import { anonymizeTransactions, callOpenRouter, defaultAiSettings } from './ai.js'
 import { clearSessionCookie, requireAdmin, requireAuth, setSessionCookie } from './auth.js'
 import { runBackup } from './backup.js'
@@ -15,7 +24,7 @@ import { registerCsvImportRoutes } from './csvImport.js'
 import { prisma } from './db.js'
 import { accountVisibilityWhere, accountWithBalance, assertSplitTotal, buildAccountEntries, dateOnly, toMoney, transactionVisibilityWhere } from './finance.js'
 import { appLog, auditLog } from './logging.js'
-import { createSessionToken, hashIp, hashPassword, hashToken, verifyPassword } from './security.js'
+import { createSessionToken, hashIp, hashPassword, hashToken, LogLevel, LogCategory, verifyPassword } from '@toppfinance/shared'
 
 const app = fastify({
   logger: {
@@ -97,10 +106,7 @@ app.get('/api/health', async () => {
 })
 
 app.post('/api/auth/login', async (request, reply) => {
-  const body = z.object({
-    email: z.string().email(),
-    password: z.string().min(1),
-  }).parse(request.body)
+  const body = loginBodySchema.parse(request.body)
 
   const user = await prisma.user.findUnique({
     where: { email: body.email.toLowerCase() },
@@ -108,7 +114,7 @@ app.post('/api/auth/login', async (request, reply) => {
   })
 
   if (!user || !user.active || !(await verifyPassword(user.passwordHash, body.password))) {
-    await appLog({ level: 'WARN', category: 'SECURITY', message: 'Login fallido', metadata: { email: body.email } })
+    await appLog({ level: LogLevel.WARN, category: LogCategory.SECURITY, message: 'Login fallido', metadata: { email: body.email } })
     return reply.code(401).send({ error: 'Credenciales invalidas' })
   }
 
@@ -189,12 +195,7 @@ app.get('/api/categories', { preHandler: requireAuth }, async request => {
 app.patch('/api/categories/:id', { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const params = z.object({ id: z.string() }).parse(request.params)
-  const body = z.object({
-    name: z.string().trim().min(1).max(80).optional(),
-    icon: z.string().trim().min(1).max(40).optional(),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-    archived: z.boolean().optional(),
-  }).parse(request.body)
+  const body = updateCategorySchema.parse(request.body)
 
   const category = await prisma.category.findFirst({ where: { id: params.id, householdId: user.householdId } })
   if (!category) return reply.code(404).send({ error: 'Categoria no encontrada' })
@@ -216,14 +217,7 @@ app.get('/api/settings', { preHandler: requireAuth }, async request => {
 
 app.patch('/api/admin/settings/shared-split', { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
-  const body = z.object({
-    miguelPercent: z.number().min(0).max(100),
-    saraPercent: z.number().min(0).max(100),
-  }).parse(request.body)
-
-  if (Math.abs(body.miguelPercent + body.saraPercent - 100) > 0.01) {
-    return reply.code(400).send({ error: 'El reparto global debe sumar 100%' })
-  }
+  const body = sharedSplitSchema.parse(request.body)
 
   await upsertSetting(user.householdId, 'sharedSplit', body)
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'adminSetting', action: 'updateSharedSplit', metadata: body })
@@ -448,14 +442,11 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
 
     const entries = buildAccountEntries({
       transactionId: created.id,
-      type: created.type,
+      type: created.type as unknown as import('@toppfinance/shared').TransactionType,
       amount: Number(created.amount),
       sourceAccountId: created.sourceAccountId,
       destinationAccountId: created.destinationAccountId,
     })
-    if (entries.length) {
-      await tx.accountEntry.createMany({ data: entries })
-    }
 
     for (const tagName of body.tags) {
       const tag = await tx.tag.upsert({
@@ -505,7 +496,7 @@ app.patch('/api/transactions/:id', { preHandler: requireAuth }, async (request, 
     await tx.accountEntry.deleteMany({ where: { transactionId: params.id } })
     const entries = buildAccountEntries({
       transactionId: next.id,
-      type: next.type,
+      type: next.type as unknown as import('@toppfinance/shared').TransactionType,
       amount: Number(next.amount),
       sourceAccountId: next.sourceAccountId,
       destinationAccountId: next.destinationAccountId,
@@ -548,7 +539,7 @@ app.post('/api/ai/insights', { preHandler: requireAuth }, async request => {
   const body = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional() }).parse(request.body ?? {})
   const settings = await getSetting(user.householdId, 'aiSettings', defaultAiSettings())
   const from = body.month ? `${body.month}-01` : undefined
-  const transactions = await prisma.transaction.findMany({
+  const rawTransactions = await prisma.transaction.findMany({
     where: {
       ...transactionVisibilityWhere(user.id, user.householdId),
       ...(from ? { date: { gte: dateOnly(from), lt: new Date(dateOnly(from).getFullYear(), dateOnly(from).getMonth() + 1, 1) } } : {}),
@@ -557,6 +548,11 @@ app.post('/api/ai/insights', { preHandler: requireAuth }, async request => {
     take: 200,
     orderBy: { date: 'desc' },
   })
+  const transactions = rawTransactions.map(tx => ({
+    ...tx,
+    amount: Number(tx.amount),
+    type: tx.type as unknown as import('@toppfinance/shared').TransactionType,
+  }))
 
   const response = await callOpenRouter({
     settings,
@@ -585,16 +581,15 @@ app.post('/api/ai/insights', { preHandler: requireAuth }, async request => {
 
 app.get('/api/admin/logs', { preHandler: requireAdmin }, async request => {
   const user = request.user!
-  const query = z.object({
-    level: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).optional(),
-    category: z.enum(['APPLICATION', 'AUDIT', 'ERROR', 'SCHEDULER', 'INTEGRATION', 'SECURITY']).optional(),
-  }).parse(request.query)
+  const query = request.query as Record<string, string | undefined>
+  const level = query.level as 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | undefined
+  const category = query.category as 'APPLICATION' | 'AUDIT' | 'ERROR' | 'SCHEDULER' | 'INTEGRATION' | 'SECURITY' | undefined
 
   const logs = await prisma.appLog.findMany({
     where: {
       OR: [{ householdId: user.householdId }, { householdId: null }],
-      ...(query.level ? { level: query.level } : {}),
-      ...(query.category ? { category: query.category } : {}),
+      ...(level ? { level } : {}),
+      ...(category ? { category } : {}),
     },
     orderBy: { createdAt: 'desc' },
     take: 300,
@@ -675,7 +670,7 @@ app.setNotFoundHandler(async (request, reply) => {
 
 try {
   await app.listen({ port: config.PORT, host: '0.0.0.0' })
-  await appLog({ level: 'INFO', category: 'APPLICATION', message: 'API iniciada', metadata: { port: config.PORT } })
+  await appLog({ level: LogLevel.INFO, category: LogCategory.APPLICATION, message: 'API iniciada', metadata: { port: config.PORT } })
 } catch (error) {
   app.log.error(error)
   process.exit(1)

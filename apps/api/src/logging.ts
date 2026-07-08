@@ -1,14 +1,9 @@
 import type { LogCategory, LogLevel } from '@prisma/client'
 import { Prisma } from '@prisma/client'
 import { prisma } from './db.js'
+import { AppLogInput, AuditLogInput } from '@toppfinance/shared'
 
-export async function appLog(input: {
-  householdId?: string | null
-  level: LogLevel
-  category: LogCategory
-  message: string
-  metadata?: Record<string, unknown>
-}) {
+export async function appLog(input: AppLogInput) {
   try {
     await prisma.appLog.create({
       data: {
@@ -24,14 +19,7 @@ export async function appLog(input: {
   }
 }
 
-export async function auditLog(input: {
-  householdId: string
-  actorUserId?: string | null
-  entity: string
-  entityId?: string | null
-  action: string
-  metadata?: Record<string, unknown>
-}) {
+export async function auditLog(input: AuditLogInput) {
   await prisma.auditLog.create({
     data: {
       householdId: input.householdId,

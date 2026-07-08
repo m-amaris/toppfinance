@@ -1,16 +1,20 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import type { UserRole } from '@prisma/client'
 import { config } from './config.js'
 import { prisma } from './db.js'
-import { hashIp, hashToken } from './security.js'
-
-export type AuthUser = {
-  id: string
-  householdId: string
-  email: string
-  displayName: string
-  role: UserRole
-}
+import { hashIp, hashToken } from '@toppfinance/shared'
+import type {
+  AuthUser,
+  LoginBody,
+  SessionUserResponse,
+  HouseholdResponse,
+  SessionCookieOptions,
+} from '@toppfinance/shared'
+import {
+  loginBodySchema,
+  sessionUserSchema,
+  householdSchema,
+  SESSION_CONFIG,
+} from '@toppfinance/shared'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -38,7 +42,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
     householdId: session.user.householdId,
     email: session.user.email,
     displayName: session.user.displayName,
-    role: session.user.role,
+    role: session.user.role as unknown as import('@toppfinance/shared').UserRole,
   }
 
   await prisma.session.update({

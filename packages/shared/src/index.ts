@@ -1,102 +1,361 @@
-import { z } from 'zod'
+/**
+ * @toppfinance/shared - Main barrel export
+ *
+ * This package contains all shared types, schemas, utilities, and contracts
+ * used across the ToppFinance monorepo (API and Web).
+ *
+ * CONVENTION:
+ * - Zod schemas: exported ONLY from './schemas.js'
+ * - TypeScript types: exported ONLY from './types.js'
+ * - Enums & type guards: exported ONLY from './enums.js'
+ * - Domain utilities: exported from their respective files
+ *   (they should NOT re-export schemas or types that live in schemas.ts/types.ts)
+ */
 
-export const currency = 'EUR' as const
-export const locale = 'es-ES' as const
+// ─── Enums ──────────────────────────────────────────────────────────────────────
+export {
+  UserRole,
+  AccountType,
+  Visibility,
+  TransactionType,
+  BudgetScope,
+  ImportStatus,
+  LogLevel,
+  LogCategory,
+  BackupStatus,
+  TransactionCategoryType,
+  DataCollection,
+  BackupFrequency,
+  isTransactionType,
+  isVisibility,
+  isAccountType,
+  isBudgetScope,
+  isUserRole,
+  isImportStatus,
+  isLogLevel,
+  isLogCategory,
+  isBackupStatus,
+  isDataCollection,
+  isBackupFrequency,
+} from './enums.js';
 
-export const transactionTypes = ['EXPENSE', 'INCOME', 'SAVING', 'TRANSFER', 'ADJUSTMENT'] as const
-export const visibilityValues = ['PRIVATE', 'SHARED'] as const
-export const accountTypes = ['PERSONAL', 'SHARED', 'SAVINGS', 'CASH', 'OTHER'] as const
-export const budgetScopes = ['USER', 'SHARED'] as const
+// ─── Zod schemas (single source of truth) ─────────────────────────────────────
+export {
+  userRoleSchema,
+  accountTypeSchema,
+  visibilitySchema,
+  transactionTypeSchema,
+  budgetScopeSchema,
+  importStatusSchema,
+  logLevelSchema,
+  logCategorySchema,
+  backupStatusSchema,
+  dataCollectionSchema,
+  backupFrequencySchema,
+  moneySchema,
+  percentSchema,
+  positiveIntSchema,
+  nonNegativeIntSchema,
+  isoDateStringSchema,
+  isoDateTimeStringSchema,
+  splitPartSchema,
+  beneficiarySplitSchema,
+  createTransactionSchema,
+  updateTransactionSchema,
+  transactionFiltersSchema,
+  createAccountSchema,
+  updateAccountSchema,
+  accountWithBalanceSchema,
+  createCategorySchema,
+  updateCategorySchema,
+  categorySchema,
+  budgetCategorySchema,
+  createBudgetSchema,
+  updateBudgetSchema,
+  budgetSchema,
+  merchantSchema,
+  tagSchema,
+  sharedSplitSchema,
+  aiSettingsSchema,
+  backupPolicySchema,
+  csvPreviewBodySchema,
+  csvCommitBodySchema,
+  importBatchSchema,
+  loginBodySchema,
+  sessionUserSchema,
+  householdSchema,
+  appLogInputSchema,
+  auditLogInputSchema,
+  openRouterMessageSchema,
+  callOpenRouterInputSchema,
+  backupRunSchema,
+  exportCsvRowSchema,
+  apiErrorSchema,
+  apiSuccessSchema,
+  paginatedResponseSchema,
+  DEFAULT_CATEGORIES,
+  DEFAULT_SHARED_SPLIT,
+  DEFAULT_CURRENCY,
+  DEFAULT_LOCALE,
+} from './schemas.js';
 
-export const transactionTypeSchema = z.enum(transactionTypes)
-export const visibilitySchema = z.enum(visibilityValues)
-export const accountTypeSchema = z.enum(accountTypes)
-export const budgetScopeSchema = z.enum(budgetScopes)
+// ─── TypeScript types (single source of truth) ────────────────────────────────
+export type {
+  Money,
+  Percent,
+  PositiveInt,
+  NonNegativeInt,
+  IsoDateString,
+  IsoDateTimeString,
+  SplitPart,
+  BeneficiarySplit,
+  CreateTransactionInput,
+  UpdateTransactionInput,
+  TransactionFilters,
+  TransactionResponse,
+  CreateAccountInput,
+  UpdateAccountInput,
+  AccountWithBalanceResponse,
+  CreateCategoryInput,
+  UpdateCategoryInput,
+  CategoryResponse,
+  BudgetCategoryInput,
+  CreateBudgetInput,
+  UpdateBudgetInput,
+  BudgetResponse,
+  MerchantResponse,
+  TagResponse,
+  SharedSplit,
+  AiSettings,
+  BackupPolicy,
+  CsvPreviewBody,
+  CsvCommitBody,
+  ImportBatchResponse,
+  LoginBody,
+  SessionUserResponse,
+  HouseholdResponse,
+  AppLogInput,
+  AuditLogInput,
+  OpenRouterMessage,
+  CallOpenRouterInput,
+  AiResponse,
+  BackupRunResponse,
+  ExportCsvRow,
+  ApiError,
+  ApiErrorDetails,
+  DefaultCategory,
+  LocalTransactionType,
+  CategoryGroup,
+  AccountForUI,
+  BudgetForUI,
+  ConfiguracionUI,
+  PatrimonioMensual,
+  MonthStats,
+  YearStats,
+  TransactionForUI,
+} from './types.js';
 
-export type TransactionType = z.infer<typeof transactionTypeSchema>
-export type Visibility = z.infer<typeof visibilitySchema>
-export type AccountType = z.infer<typeof accountTypeSchema>
-export type BudgetScope = z.infer<typeof budgetScopeSchema>
+// ─── Money utilities ──────────────────────────────────────────────────────────
+export {
+  toMoney,
+  toCents,
+  fromCents,
+  addMoney,
+  subtractMoney,
+  multiplyMoney,
+  divideMoney,
+  percentOf,
+  formatMoney,
+  formatMoneyPlain,
+  parseMoney,
+  isValidMoney,
+  sumMoney,
+  absMoney,
+  clampMoney,
+  compareMoney,
+} from './money.js';
 
-export const splitPartSchema = z.object({
-  userId: z.string().min(1),
-  percent: z.number().min(0).max(100),
-})
+// ─── Date utilities ───────────────────────────────────────────────────────────
+export {
+  dateOnly,
+  dateOnlyFromDate,
+  todayIso,
+  currentMonthKey,
+  toIsoDateString,
+  toIsoMonthString,
+  monthKeyFromDate,
+  parseDateValue,
+  addMonths,
+  startOfMonth,
+  endOfMonth,
+  rangeMonths,
+  previousMonth,
+  nextMonth,
+  isValidIsoDate,
+  isValidIsoMonth,
+  formatDateEs,
+  formatMonthEs,
+  formatMonthShortEs,
+  daysInMonth,
+  getWeekNumber,
+  startOfWeek,
+  endOfWeek,
+} from './date.js';
 
-export const createTransactionSchema = z.object({
-  type: transactionTypeSchema,
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  amount: z.number(),
-  description: z.string().trim().min(1).max(240),
-  categoryId: z.string().min(1),
-  sourceAccountId: z.string().min(1).optional().nullable(),
-  destinationAccountId: z.string().min(1).optional().nullable(),
-  visibility: visibilitySchema,
-  paidByUserId: z.string().min(1).optional().nullable(),
-  beneficiarySplits: z.array(splitPartSchema).min(1),
-  merchantName: z.string().trim().max(120).optional().nullable(),
-  tags: z.array(z.string().trim().min(1).max(40)).default([]),
-  notes: z.string().trim().max(2000).optional().nullable(),
-})
+// ─── Visibility & access control ──────────────────────────────────────────────
+export {
+  canSeeTransaction,
+  accountVisibilityWhere,
+  transactionVisibilityWhere,
+  categoryVisibilityWhere,
+  budgetVisibilityWhere,
+  canEditTransaction,
+  canDeleteTransaction,
+  canEditCategory,
+  canEditAccount,
+  canEditBudget,
+  isAdmin,
+  inferVisibility,
+  validateVisibilityForTransaction,
+} from './visibility.js';
 
-export const updateTransactionSchema = createTransactionSchema.partial().extend({
-  beneficiarySplits: z.array(splitPartSchema).min(1).optional(),
-})
+// ─── Account utilities ────────────────────────────────────────────────────────
+export {
+  buildAccountEntries,
+  calculateAccountBalance,
+  validateAccountAccess,
+  getDefaultAccountForType,
+  validateTransferAccounts,
+  getAccountDisplayInfo,
+} from './accounts.js';
 
-export const transactionFiltersSchema = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  type: transactionTypeSchema.optional(),
-  categoryId: z.string().optional(),
-  accountId: z.string().optional(),
-  tag: z.string().optional(),
-  search: z.string().optional(),
-  visibility: visibilitySchema.optional(),
-})
+// ─── Split utilities ──────────────────────────────────────────────────────────
+export {
+  assertSplitTotal,
+  normalizeSplits,
+  equalSplits,
+  findUser,
+  parseBeneficiarySplits,
+  defaultSplits,
+  calculateSplitAmounts,
+  validateSplitUsers,
+  normalizeText,
+  makeSourceHash,
+  getSplitRequirement,
+} from './splits.js';
+export type { SplitUser, SharedSplitConfig, TransactionSplitRequirement } from './splits.js';
 
-export const aiSettingsSchema = z.object({
-  defaultModel: z.string().trim().min(1),
-  fallbackModels: z.array(z.string().trim().min(1)).default([]),
-  enforceZdr: z.boolean().default(true),
-  dataCollection: z.enum(['deny', 'allow']).default('deny'),
-})
+// ─── CSV import utilities ─────────────────────────────────────────────────────
+export {
+  CSV_COLUMN_ALIASES,
+  TRANSACTION_TYPE_LABELS,
+  FALLBACK_CATEGORY_BY_TYPE,
+  detectDelimiter,
+  parseCsv,
+  pick,
+  parseTypeValue,
+  parseVisibilityValue,
+  splitTags,
+  findCategory,
+  findAccount,
+  buildPreviewRows,
+  validateCommitBody,
+  transactionsToCsv,
+} from './csv.js';
+export type { CsvRecord, ImportDraft, CsvPreviewRow, BuildPreviewRowsInput, BuildPreviewRowsOutput } from './csv.js';
 
-export const backupPolicySchema = z.object({
-  frequency: z.enum(['daily', 'weekly', 'monthly']).default('weekly'),
-  retentionWeeks: z.number().int().min(1).max(260).default(30),
-  backupDir: z.string().trim().min(1).default('./backups'),
-})
+// ─── AI utilities ─────────────────────────────────────────────────────────────
+export {
+  defaultAiSettings,
+  callOpenRouter,
+  anonymizeTransactions,
+  buildInsightsSystemPrompt,
+  buildInsightsUserPrompt,
+  validateAiSettings,
+  buildModelsArray,
+} from './ai.js';
+export type { OpenRouterResponse } from './ai.js';
 
-export const defaultCategories = [
-  { type: 'EXPENSE', slug: 'vivienda', name: 'Vivienda', icon: 'Home', color: '#01696f' },
-  { type: 'EXPENSE', slug: 'servicios', name: 'Servicios', icon: 'Bolt', color: '#0f766e' },
-  { type: 'EXPENSE', slug: 'alimentacion', name: 'Alimentacion', icon: 'ShoppingCart', color: '#437a22' },
-  { type: 'EXPENSE', slug: 'transporte', name: 'Transporte', icon: 'Car', color: '#006494' },
-  { type: 'EXPENSE', slug: 'salud', name: 'Salud', icon: 'Heart', color: '#964219' },
-  { type: 'EXPENSE', slug: 'deporte', name: 'Deporte', icon: 'Dumbbell', color: '#1d4ed8' },
-  { type: 'EXPENSE', slug: 'ocio', name: 'Ocio', icon: 'Gamepad2', color: '#d19900' },
-  { type: 'EXPENSE', slug: 'compras', name: 'Compras', icon: 'Package', color: '#7a39bb' },
-  { type: 'EXPENSE', slug: 'educacion', name: 'Educacion', icon: 'GraduationCap', color: '#a13544' },
-  { type: 'EXPENSE', slug: 'ropa', name: 'Ropa', icon: 'Shirt', color: '#da7101' },
-  { type: 'EXPENSE', slug: 'viajes', name: 'Viajes', icon: 'Plane', color: '#0891b2' },
-  { type: 'EXPENSE', slug: 'regalos', name: 'Regalos', icon: 'Gift', color: '#be185d' },
-  { type: 'EXPENSE', slug: 'otros', name: 'Otros', icon: 'MoreHorizontal', color: '#7a7974' },
-  { type: 'INCOME', slug: 'nomina', name: 'Nomina', icon: 'Briefcase', color: '#01696f' },
-  { type: 'INCOME', slug: 'freelance', name: 'Freelance', icon: 'Code2', color: '#437a22' },
-  { type: 'INCOME', slug: 'inversiones', name: 'Inversiones', icon: 'TrendingUp', color: '#006494' },
-  { type: 'INCOME', slug: 'otros_ingreso', name: 'Otros ingresos', icon: 'Plus', color: '#7a7974' },
-  { type: 'SAVING', slug: 'ahorro', name: 'Ahorro', icon: 'PiggyBank', color: '#01696f' },
-  { type: 'TRANSFER', slug: 'transferencia_interna', name: 'Transferencia interna', icon: 'ArrowLeftRight', color: '#0f766e' },
-  { type: 'ADJUSTMENT', slug: 'ajuste_manual', name: 'Ajuste manual', icon: 'Scale', color: '#7a7974' },
-] as const satisfies Array<{
-  type: TransactionType
-  slug: string
-  name: string
-  icon: string
-  color: string
-}>
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+export {
+  SESSION_CONFIG,
+  getUser,
+  isAdmin as isAdminAuth,
+  belongsToHousehold,
+} from './auth.js';
+export type { AuthUser, SessionCookieOptions } from './auth.js';
 
-export const defaultSharedSplit = {
-  miguelPercent: 50,
-  saraPercent: 50,
-}
+// ─── Config schemas ───────────────────────────────────────────────────────────
+export {
+  envSchema,
+  parseFallbackModels,
+  parseCorsOrigins,
+  publicConfigSchema,
+  adminSettingsSchema,
+  DEFAULT_ADMIN_SETTINGS,
+} from './config.js';
+export type { Config, PublicConfig, AdminSettings } from './config.js';
+
+// ─── Logging helpers ──────────────────────────────────────────────────────────
+export {
+  createChildLogger,
+  sanitizeMetadata,
+  LOG_LEVEL_ORDER,
+  shouldLog,
+} from './logging.js';
+export type { AppLogEntry, AuditLogEntry, LogFilters, Logger } from './logging.js';
+
+// ─── Security utilities ───────────────────────────────────────────────────────
+export {
+  createSessionToken,
+  createSecureToken,
+  hashToken,
+  hashIp,
+  hashPassword,
+  verifyPassword,
+  secureCompare,
+  generateApiKey,
+  hashApiKey,
+  checkPasswordStrength,
+  generateCsrfToken,
+  validateCsrfToken,
+} from './security.js';
+export type { PasswordStrength } from './security.js';
+
+// ─── Category utilities ───────────────────────────────────────────────────────
+export {
+  CATEGORIES_BY_TYPE,
+  DEFAULT_CATEGORY_SLUG_BY_TYPE,
+  mapApiCategory,
+  localizeCategoryName,
+  isValidCategorySlug,
+  getDefaultIconForType,
+  getDefaultColorForType,
+  getCategoryTypeBySlug,
+  isIncomeCategory,
+  isExpenseCategory,
+  sortCategoriesForType,
+  getDefaultCategorySlug,
+  getCategoryColor,
+  getCategoryIcon,
+  EXPENSE_CATEGORY_ORDER,
+  INCOME_CATEGORY_ORDER,
+} from './categories.js';
+export type { CategoryDefinition } from './categories.js';
+
+// ─── Budget utilities ─────────────────────────────────────────────────────────
+export {
+  BudgetAlertLevel,
+  validateBudgetUniqueness,
+  calculateBudgetSpending,
+  getBudgetAlertLevel,
+  createBudgetSummary,
+  getDefaultBudgetCategories,
+} from './budgets.js';
+export type { BudgetScopeType, BudgetWithSpending, BudgetSummary, CategorySummary } from './budgets.js';
+
+// ─── Re-export commonly used Zod ──────────────────────────────────────────────
+export { z } from 'zod';
+
+// ─── Version ──────────────────────────────────────────────────────────────────
+export const VERSION = '0.1.0';
