@@ -2,7 +2,12 @@
  * Date utilities.
  * All dates are handled as ISO strings (YYYY-MM-DD) or Date objects in UTC.
  * Avoids timezone issues by using noon UTC for date-only values.
+ *
+ * Accounting date policy: YYYY-MM-DD strict, no hours/offsets.
+ * See docs/financial-domain.md for the full policy.
  */
+
+const RECONCILIATION_WINDOW_DAYS = 3;
 
 /**
  * Creates a Date at noon UTC for a given ISO date string (YYYY-MM-DD).
@@ -124,18 +129,28 @@ export function endOfMonth(isoDate: string): string {
 
 /**
  * Returns an array of month keys (YYYY-MM) between two dates inclusive.
+ *
+ * Pure arithmetic over the year/month numerics — no Date construction — so the
+ * result is independent of the runtime timezone. (The previous Date-based
+ * implementation read .toISOString() on a local-midnight Date, which shifted
+ * the month back by one in timezones behind UTC.)
  */
 export function rangeMonths(start: string, end: string): string[] {
-  const startDate = dateOnly(start);
-  const endDate = dateOnly(end);
   const months: string[] = [];
+  const [sy, sm] = start.split('-').map(Number);
+  const [ey, em] = end.split('-').map(Number);
 
-  const current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-  const last = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
-
-  while (current <= last) {
-    months.push(toIsoMonthString(current));
-    current.setMonth(current.getMonth() + 1);
+  let y = sy;
+  let m = sm;
+  // Walk months forward until strictly past the end month.
+  while (y < ey || (y === ey && m <= em)) {
+    months.push(`${y}-${padZero(m)}`);
+    if (m === 12) {
+      y += 1;
+      m = 1;
+    } else {
+      m += 1;
+    }
   }
 
   return months;
@@ -143,20 +158,22 @@ export function rangeMonths(start: string, end: string): string[] {
 
 /**
  * Returns the previous month key (YYYY-MM).
+ * Pure arithmetic; timezone-independent.
  */
 export function previousMonth(monthKey: string): string {
   const [year, month] = monthKey.split('-').map(Number);
-  const date = new Date(year, month - 2, 1); // month is 1-indexed
-  return toIsoMonthString(date);
+  if (month === 1) return `${year - 1}-12`;
+  return `${year}-${padZero(month - 1)}`;
 }
 
 /**
  * Returns the next month key (YYYY-MM).
+ * Pure arithmetic; timezone-independent.
  */
 export function nextMonth(monthKey: string): string {
   const [year, month] = monthKey.split('-').map(Number);
-  const date = new Date(year, month, 1); // month is 1-indexed
-  return toIsoMonthString(date);
+  if (month === 12) return `${year + 1}-01`;
+  return `${year}-${padZero(month + 1)}`;
 }
 
 /**
@@ -191,26 +208,30 @@ export function formatDateEs(dateString: string, options: Intl.DateTimeFormatOpt
 }
 
 /**
- * Formats a month for display in Spanish locale (e.g., "Enero 2024").
+ * Formats a month for display in Spanish locale (e.g., "enero 2024").
+ * Pinned to UTC so the rendered month never drifts with the runtime timezone.
  */
 export function formatMonthEs(monthKey: string): string {
   const [year, month] = monthKey.split('-').map(Number);
-  const date = new Date(year, month - 1, 1);
+  const date = new Date(Date.UTC(year, month - 1, 1));
   return new Intl.DateTimeFormat('es-ES', {
     month: 'long',
     year: 'numeric',
+    timeZone: 'UTC',
   }).format(date);
 }
 
 /**
  * Formats a month for short display in Spanish locale (e.g., "Ene 2024").
+ * Pinned to UTC so the rendered month never drifts with the runtime timezone.
  */
 export function formatMonthShortEs(monthKey: string): string {
   const [year, month] = monthKey.split('-').map(Number);
-  const date = new Date(year, month - 1, 1);
+  const date = new Date(Date.UTC(year, month - 1, 1));
   return new Intl.DateTimeFormat('es-ES', {
     month: 'short',
     year: 'numeric',
+    timeZone: 'UTC',
   }).format(date).replace('.', '');
 }
 
@@ -257,4 +278,68 @@ export function endOfWeek(isoDate: string): string {
   const date = dateOnly(startOfWeek(isoDate));
   date.setDate(date.getDate() + 6);
   return toIsoDateString(date);
+}
+
+/**
+ * Strictly parses an accounting date string.
+ * Only accepts YYYY-MM-DD format. Rejects ambiguous formats (DD/MM/YYYY, etc.).
+ * This is the canonical entry point for CSV import dates.
+ * Returns null if the value is not a valid YYYY-MM-DD date.
+ */
+export function parseAccountingDate(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  // Strict ISO format only — no ambiguous European formats in accounting context
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
+  // Validate the date is real (not Feb 30, etc.)
+  const [year, month, day] = trimmed.split('-').map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (
+    d.getUTCFullYear() !== year ||
+    d.getUTCMonth() !== month - 1 ||
+    d.getUTCDate() !== day
+  ) return null;
+  return trimmed;
+}
+
+/**
+ * Returns the ISO date-only string from a Date object without timezone shift.
+ * Always returns YYYY-MM-DD.
+ */
+export function normalizeDateOnly(date: Date): string {
+  return `${date.getUTCFullYear()}-${padZero(date.getUTCMonth() + 1)}-${padZero(date.getUTCDate())}`;
+}
+
+/**
+ * Compares two ISO date-only strings (YYYY-MM-DD).
+ * Returns -1 if a < b, 0 if a === b, 1 if a > b.
+ */
+export function compareDateOnly(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+/**
+ * Returns the number of calendar days between two ISO date strings.
+ * Always returns a non-negative integer.
+ */
+export function daysBetween(a: string, b: string): number {
+  const dateA = new Date(`${a}T12:00:00.000Z`);
+  const dateB = new Date(`${b}T12:00:00.000Z`);
+  const diffMs = Math.abs(dateA.getTime() - dateB.getTime());
+  return Math.round(diffMs / 86400000);
+}
+
+/**
+ * Checks if a date is within the reconciliation window of another date.
+ * The reconciliation window is defined in calendar days (default 3).
+ * Both dates must be ISO date-only strings (YYYY-MM-DD).
+ */
+export function isWithinReconciliationWindow(
+  dateA: string,
+  dateB: string,
+  windowDays: number = RECONCILIATION_WINDOW_DAYS
+): boolean {
+  return daysBetween(dateA, dateB) <= windowDays;
 }

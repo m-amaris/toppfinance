@@ -1,14 +1,43 @@
 /**
- * CSV import schemas and utilities.
- * Defines the CSV format, parsing logic, and transformation to transaction drafts.
+ * CSV import schemas, pipeline, and utilities.
+ *
+ * Implements the canonical import pipeline defined in docs/financial-domain.md:
+ *
+ *   parseCsvRows → normalizeCsvRow → buildImportDraft → computeImportFingerprint → classifyImportRow
+ *
+ * Stages 1–4 are pure functions with no database access. Stage 5 (classification)
+ * receives DB lookup data injected as a parameter (ImportClassificationContext).
+ *
+ * Policies enforced here (see docs/financial-domain.md):
+ * - Currency: only EUR is supported. Rows with an explicit non-EUR marker are rejected.
+ * - Money: integer cents internally; banker's rounding via money.ts (parseCsvMoney).
+ * - Accounting date: strict YYYY-MM-DD (parseAccountingDate). Ambiguous formats are rejected.
+ * - Category ↔ transaction type compatibility.
+ * - Idempotency: externalId (when present) else a deterministic SHA-256 fingerprint.
+ *
+ * The fingerprint canonicalises amount to ABSOLUTE cents (the monetary magnitude),
+ * matching how amounts are stored (abs for non-ADJUSTMENT). The TransactionType is part
+ * of the fingerprint basis, so an expense and an income of the same magnitude never collide.
  */
 
 import { z } from 'zod';
-import { TransactionType, Visibility } from './enums.js';
+import { createHash } from 'node:crypto';
+import { parse } from 'csv-parse/sync';
+import { TransactionType, Visibility, ImportClassification } from './enums.js';
 import { createTransactionSchema } from './schemas.js';
-import { parseDateValue } from './date.js';
-import { parseMoney } from './money.js';
-import { SplitUser, SharedSplitConfig, parseBeneficiarySplits, defaultSplits, makeSourceHash, normalizeText, findUser } from './splits.js';
+import { parseAccountingDate, isWithinReconciliationWindow } from './date.js';
+import { parseCsvMoney, fromCents } from './money.js';
+import { DEFAULT_CURRENCY, normalizeCurrency } from './currency.js';
+import type { CurrencyCode } from './currency.js';
+import {
+  SplitUser,
+  SharedSplitConfig,
+  parseBeneficiarySplits,
+  defaultSplits,
+  normalizeText,
+  findUser,
+  assertSplitTotal,
+} from './splits.js';
 import type { CreateTransactionInput } from './types.js';
 
 /**
@@ -29,6 +58,7 @@ export const CSV_COLUMN_ALIASES = {
   tags: ['tags', 'etiquetas'],
   notes: ['notes', 'notas'],
   externalId: ['external_id', 'id_externo', 'bank_id'],
+  currency: ['currency', 'moneda', 'divisa'],
 } as const;
 
 /**
@@ -49,16 +79,88 @@ export const csvCommitParamsSchema = z.object({
 });
 
 /**
- * CSV preview row result.
+ * Suggested user action for a classified import row.
  */
-export interface CsvPreviewRow {
+export type ImportSuggestedAction = 'import' | 'skip' | 'review';
+
+/**
+ * A single CSV row with each field parsed and normalised.
+ * `raw*` fields keep the original text; the normalised fields hold parsed values.
+ */
+export interface NormalizedImportRow {
+  rawDate: string;
+  rawAmount: string;
+  rawType: string;
+  rawDescription: string;
+  rawCategory: string;
+  rawSourceAccount: string;
+  rawDestinationAccount: string;
+  rawVisibility: string;
+  rawPaidBy: string;
+  rawBeneficiarySplit: string;
+  rawMerchant: string;
+  rawTags: string;
+  rawNotes: string;
+  rawExternalId: string;
+  rawCurrency: string;
+  /** ISO accounting date (YYYY-MM-DD), or null if invalid/ambiguous. */
+  date: string | null;
+  /** Signed integer cents from the CSV, or null if unparseable. */
+  amountCents: number | null;
+  type: TransactionType;
+  description: string;
+  visibility: Visibility;
+  /** Canonical currency when the marker is supported (EUR), null when explicitly unsupported. */
+  currency: CurrencyCode | null;
+}
+
+/**
+ * Reconciliation decision for a classified row.
+ */
+export interface ReconciliationDecision {
+  classification: ImportClassification;
+  reason: string;
+  matchedTransactionId?: string;
+  matchedFingerprint?: string;
+  candidateDate?: string;
+  candidateAmount?: number;
+}
+
+/**
+ * Full pipeline output for one row (stages 1–5).
+ */
+export interface ClassifiedImportRow {
   rowNumber: number;
+  normalized: NormalizedImportRow;
+  draft: CreateTransactionInput | null;
+  fingerprint: string;
+  idempotencyKey: string;
+  reconciliation: ReconciliationDecision;
+  errors: string[];
+  warnings: string[];
+  suggestedAction: ImportSuggestedAction;
+}
+
+/**
+ * DB lookup data injected into the pure classification stage.
+ * Maps are keyed by the relevant identifier; values are existing transaction ids.
+ * `candidates` is keyed by ABSOLUTE cents and lists existing (date, transactionId) pairs,
+ * used for the duplicate_candidate (same amount, date within ±3 days) check.
+ */
+export interface ImportClassificationContext {
+  fingerprints: ReadonlyMap<string, string>;
+  externalIds: ReadonlyMap<string, string>;
+  candidates: ReadonlyMap<number, ReadonlyArray<{ date: string; transactionId: string }>>;
+}
+
+/**
+ * CSV preview row result (classified + display-ready; backward compatible).
+ */
+export interface CsvPreviewRow extends ClassifiedImportRow {
   status: 'ready' | 'error' | 'duplicate';
   duplicate: boolean;
+  /** Legacy alias of `fingerprint`; kept for webhook/UI commit-body compatibility. */
   sourceHash: string;
-  warnings: string[];
-  errors: string[];
-  draft: ImportDraft | null;
   display: {
     date: string | null;
     type: TransactionType;
@@ -106,10 +208,9 @@ export function detectDelimiter(content: string): string {
 }
 
 /**
- * Parses CSV content into records.
+ * Parses CSV content into raw records (pipeline stage 1).
  */
 export function parseCsv(content: string): CsvRecord[] {
-  const { parse } = require('csv-parse/sync');
   return parse(content, {
     bom: true,
     columns: true,
@@ -119,6 +220,9 @@ export function parseCsv(content: string): CsvRecord[] {
     trim: true,
   }) as CsvRecord[];
 }
+
+/** Conceptual alias for stage 1, matching the documented pipeline name. */
+export { parseCsv as parseCsvRows };
 
 /**
  * Picks a value from a CSV record using aliases.
@@ -132,7 +236,7 @@ export function pick(record: CsvRecord, aliases: readonly string[]): string {
 }
 
 /**
- * Parses transaction type from raw string and amount.
+ * Parses transaction type from raw string and amount (stage 1 helper).
  */
 export function parseTypeValue(raw: string, amount: number): TransactionType {
   const value = normalizeText(raw);
@@ -206,18 +310,309 @@ export function findAccount(
 }
 
 /**
- * Builds preview rows from CSV content.
+ * Normalises a raw CSV record into a NormalizedImportRow (pipeline stage 2).
+ * Pure: no side effects, no DB access.
+ *
+ * Currency handling: an empty marker assumes EUR (default). A present but
+ * unsupported marker normalises to `currency: null`, which the draft stage
+ * turns into a blocking error.
+ */
+export function normalizeCsvRow(record: CsvRecord): NormalizedImportRow {
+  const rawDate = pick(record, CSV_COLUMN_ALIASES.date);
+  const rawAmount = pick(record, CSV_COLUMN_ALIASES.amount);
+  const rawType = pick(record, CSV_COLUMN_ALIASES.type);
+  const rawDescription = pick(record, CSV_COLUMN_ALIASES.description);
+  const rawCategory = pick(record, CSV_COLUMN_ALIASES.category);
+  const rawSourceAccount = pick(record, CSV_COLUMN_ALIASES.sourceAccount);
+  const rawDestinationAccount = pick(record, CSV_COLUMN_ALIASES.destinationAccount);
+  const rawVisibility = pick(record, CSV_COLUMN_ALIASES.visibility);
+  const rawPaidBy = pick(record, CSV_COLUMN_ALIASES.paidBy);
+  const rawBeneficiarySplit = pick(record, CSV_COLUMN_ALIASES.beneficiarySplit);
+  const rawMerchant = pick(record, CSV_COLUMN_ALIASES.merchant);
+  const rawTags = pick(record, CSV_COLUMN_ALIASES.tags);
+  const rawNotes = pick(record, CSV_COLUMN_ALIASES.notes);
+  const rawExternalId = pick(record, CSV_COLUMN_ALIASES.externalId);
+  const rawCurrency = pick(record, CSV_COLUMN_ALIASES.currency);
+
+  const date = parseAccountingDate(rawDate);
+  const amountCents = parseCsvMoney(rawAmount);
+  const description = rawDescription.trim();
+  const type = parseTypeValue(rawType, amountCents ?? 0);
+  const visibility = parseVisibilityValue(rawVisibility);
+  const currency = rawCurrency ? normalizeCurrency(rawCurrency) : DEFAULT_CURRENCY;
+
+  return {
+    rawDate, rawAmount, rawType, rawDescription, rawCategory,
+    rawSourceAccount, rawDestinationAccount, rawVisibility, rawPaidBy,
+    rawBeneficiarySplit, rawMerchant, rawTags, rawNotes, rawExternalId, rawCurrency,
+    date, amountCents, type, description, visibility, currency,
+  };
+}
+
+export interface BuildImportDraftInput {
+  normalized: NormalizedImportRow;
+  categories: Array<{ id: string; slug: string; name: string; type: TransactionType }>;
+  accounts: Array<{ id: string; name: string; type: string; visibility: Visibility; ownerUserId: string | null }>;
+  users: SplitUser[];
+  actorUserId: string;
+  sharedSplit: SharedSplitConfig;
+  defaultSourceAccountId?: string | null;
+  defaultDestinationAccountId?: string | null;
+}
+
+export interface BuildImportDraftResult {
+  draft: CreateTransactionInput | null;
+  errors: string[];
+  warnings: string[];
+  /** Resolved account names — the canonical labels used for the fingerprint. */
+  sourceAccountName: string;
+  destinationAccountName: string;
+  categoryName: string;
+  resolvedType: TransactionType;
+}
+
+/**
+ * Resolves a normalised row into a transaction draft (pipeline stage 3).
+ * Pure: category/account/user resolution happens against injected lookups.
+ *
+ * Enforces the category ↔ transaction type compatibility rule: a category whose
+ * type does not match the row's type is replaced with the per-type fallback.
+ */
+export function buildImportDraft(input: BuildImportDraftInput): BuildImportDraftResult {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const { normalized, categories, accounts, users, actorUserId, sharedSplit } = input;
+
+  // Currency policy: only EUR.
+  if (normalized.rawCurrency && !normalized.currency) {
+    errors.push(`Moneda no soportada: "${normalized.rawCurrency}". Solo se acepta EUR.`);
+  }
+
+  // Strict date + cents validation.
+  if (!normalized.date) errors.push('Fecha inválida (formato esperado YYYY-MM-DD).');
+  if (normalized.amountCents == null) errors.push('Importe inválido.');
+  if (!normalized.description) errors.push('Descripción obligatoria.');
+
+  const amountCents = normalized.amountCents ?? 0;
+  const absCents = Math.abs(amountCents);
+  const type = normalized.type;
+  const visibility = normalized.visibility;
+
+  // Category resolution + type compatibility.
+  const categoryResult = findCategory(normalized.rawCategory, type, categories);
+  let category = categoryResult.category;
+  if (category && category.type !== type) {
+    const fallbackSlug = FALLBACK_CATEGORY_BY_TYPE[type];
+    const fallback = categories.find(c => c.slug === fallbackSlug) ?? category;
+    warnings.push(
+      `Categoría "${category.name}" no es compatible con el tipo ${TRANSACTION_TYPE_LABELS[type]}; se usará ${fallback.name}.`
+    );
+    category = fallback;
+  } else if (categoryResult.usedFallback && category) {
+    warnings.push(`Categoría no encontrada; se usará ${category.name}.`);
+  }
+  if (!category) errors.push('No hay categorías disponibles.');
+
+  // Accounts visible to the actor.
+  const visibleAccounts = accounts.filter(acc =>
+    acc.visibility === Visibility.SHARED || acc.ownerUserId === actorUserId
+  );
+
+  const sourceResult = findAccount(normalized.rawSourceAccount, visibleAccounts, input.defaultSourceAccountId);
+  if (sourceResult.usedFallback && sourceResult.account) {
+    warnings.push(`Cuenta origen no encontrada; se usará ${sourceResult.account.name}.`);
+  }
+
+  let destinationResult = findAccount(normalized.rawDestinationAccount, visibleAccounts, input.defaultDestinationAccountId);
+  if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
+      (!destinationResult.account || destinationResult.account.id === sourceResult.account?.id)) {
+    const alternative = visibleAccounts.find(acc =>
+      acc.id !== sourceResult.account?.id &&
+      (acc.type === 'SAVINGS' || acc.type === 'SHARED')
+    ) ?? visibleAccounts.find(acc => acc.id !== sourceResult.account?.id);
+    destinationResult = { account: alternative ?? null, usedFallback: true };
+  }
+  if (normalized.rawDestinationAccount && destinationResult.usedFallback && destinationResult.account) {
+    warnings.push(`Cuenta destino no encontrada; se usará ${destinationResult.account.name}.`);
+  }
+
+  // Account requirements per type.
+  if ((type === TransactionType.EXPENSE || type === TransactionType.INCOME || type === TransactionType.ADJUSTMENT) && !sourceResult.account) {
+    errors.push('Falta cuenta origen.');
+  }
+  if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) && (!sourceResult.account || !destinationResult.account)) {
+    errors.push('Faltan cuenta origen y destino.');
+  }
+  if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) && sourceResult.account?.id === destinationResult.account?.id) {
+    errors.push('La cuenta origen y destino no pueden ser la misma.');
+  }
+
+  // Paid by.
+  const paidByUser = normalized.rawPaidBy
+    ? findUser(users, normalized.rawPaidBy)
+    : users.find(u => u.id === actorUserId);
+  if (normalized.rawPaidBy && !paidByUser) {
+    warnings.push('Pagador no encontrado; se usará el usuario actual.');
+  }
+
+  // Beneficiary splits.
+  const parsedSplits = parseBeneficiarySplits(normalized.rawBeneficiarySplit, users);
+  warnings.push(...parsedSplits.warnings);
+  const beneficiarySplits = parsedSplits.splits ?? defaultSplits({
+    visibility,
+    users,
+    actorUserId,
+    sharedSplit,
+  });
+
+  // Amount: absolute cents except ADJUSTMENT (keeps sign).
+  const amount = type === TransactionType.ADJUSTMENT ? fromCents(amountCents) : fromCents(absCents);
+
+  const draft: CreateTransactionInput = {
+    type,
+    date: normalized.date ?? '1970-01-01',
+    amount,
+    description: normalized.description,
+    categoryId: category?.id ?? '',
+    sourceAccountId: sourceResult.account?.id ?? null,
+    destinationAccountId: (type === TransactionType.SAVING || type === TransactionType.TRANSFER)
+      ? destinationResult.account?.id ?? null
+      : null,
+    visibility,
+    paidByUserId: paidByUser?.id ?? actorUserId,
+    beneficiarySplits,
+    merchantName: normalized.rawMerchant || null,
+    tags: splitTags(normalized.rawTags),
+    notes: normalized.rawNotes || null,
+    externalId: normalized.rawExternalId || null,
+  };
+
+  // Schema validation.
+  const schemaResult = createTransactionSchema.safeParse(draft);
+  if (!schemaResult.success) {
+    errors.push(...schemaResult.error.issues.map(issue => issue.message));
+  }
+
+  // Splits sum to 100%.
+  try {
+    assertSplitTotal(beneficiarySplits);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : 'El reparto debe sumar 100%.');
+  }
+
+  return {
+    draft: errors.length ? null : draft,
+    errors,
+    warnings,
+    sourceAccountName: sourceResult.account?.name ?? '',
+    destinationAccountName: destinationResult.account?.name ?? '',
+    categoryName: category?.name ?? normalized.rawCategory,
+    resolvedType: type,
+  };
+}
+
+/**
+ * Computes the deterministic import fingerprint (pipeline stage 4).
+ * SHA-256 over normalised fields: {date, type, amountCents, description,
+ * sourceAccountName, destinationAccountName, merchant}. `amountCents` is the
+ * ABSOLUTE magnitude (see module doc). Pure.
+ */
+export function computeImportFingerprint(input: {
+  date: string;
+  type: TransactionType;
+  amountCents: number;
+  description: string;
+  sourceAccountName: string;
+  destinationAccountName: string;
+  merchant: string;
+}): string {
+  const basis = JSON.stringify({
+    date: input.date,
+    type: input.type,
+    amountCents: input.amountCents,
+    description: normalizeText(input.description),
+    sourceAccountName: normalizeText(input.sourceAccountName),
+    destinationAccountName: normalizeText(input.destinationAccountName),
+    merchant: normalizeText(input.merchant),
+  });
+  return createHash('sha256').update(basis).digest('hex');
+}
+
+/**
+ * Classifies a normalised row against injected DB data (pipeline stage 5).
+ * Pure: all DB knowledge arrives via `context`.
+ *
+ * Precedence:
+ * 1. externalId match → duplicate_exact
+ * 2. fingerprint match → duplicate_exact
+ * 3. same abs cents + date within ±3 days → duplicate_candidate
+ * 4. otherwise → new
+ */
+export function classifyImportRow(input: {
+  fingerprint: string;
+  externalId: string | null;
+  date: string;
+  amountCents: number;
+  context: ImportClassificationContext;
+}): ReconciliationDecision {
+  const { fingerprint, externalId, date, amountCents, context } = input;
+
+  if (externalId) {
+    const matchedId = context.externalIds.get(externalId);
+    if (matchedId) {
+      return {
+        classification: ImportClassification.DUPLICATE_EXACT,
+        reason: `externalId ya importado: ${externalId}`,
+        matchedTransactionId: matchedId,
+      };
+    }
+  }
+
+  const matchedByFp = context.fingerprints.get(fingerprint);
+  if (matchedByFp) {
+    return {
+      classification: ImportClassification.DUPLICATE_EXACT,
+      reason: 'El fingerprint coincide con una transacción existente.',
+      matchedTransactionId: matchedByFp,
+      matchedFingerprint: fingerprint,
+    };
+  }
+
+  const candidates = context.candidates.get(amountCents);
+  if (candidates) {
+    for (const candidate of candidates) {
+      if (isWithinReconciliationWindow(date, candidate.date)) {
+        return {
+          classification: ImportClassification.DUPLICATE_CANDIDATE,
+          reason: 'Mismo importe y fecha cercana (±3 días).',
+          matchedTransactionId: candidate.transactionId,
+          candidateDate: candidate.date,
+          candidateAmount: amountCents,
+        };
+      }
+    }
+  }
+
+  return {
+    classification: ImportClassification.NEW,
+    reason: 'Sin coincidencias; lista para importar.',
+  };
+}
+
+/**
+ * Builds preview rows from CSV content + injected lookups (full pipeline).
  */
 export interface BuildPreviewRowsInput {
   user: { id: string; householdId: string };
   fileName: string;
   content: string;
-  defaultSourceAccountId?: string | null;
-  defaultDestinationAccountId?: string | null;
   categories: Array<{ id: string; slug: string; name: string; type: TransactionType }>;
   accounts: Array<{ id: string; name: string; type: string; visibility: Visibility; ownerUserId: string | null }>;
   users: SplitUser[];
   sharedSplit: SharedSplitConfig;
+  defaultSourceAccountId?: string | null;
+  defaultDestinationAccountId?: string | null;
+  classificationContext: ImportClassificationContext;
 }
 
 export interface BuildPreviewRowsOutput {
@@ -243,179 +638,100 @@ export async function buildPreviewRows(input: BuildPreviewRowsInput): Promise<Bu
 
   const rows: CsvPreviewRow[] = records.map((record, index) => {
     const rowNumber = index + 2; // 1-indexed, accounting for header
-    const warnings: string[] = [];
-    const errors: string[] = [];
+    const normalized = normalizeCsvRow(record);
 
-    // Extract raw values
-    const rawDate = pick(record, CSV_COLUMN_ALIASES.date);
-    const rawAmount = pick(record, CSV_COLUMN_ALIASES.amount);
-    const rawType = pick(record, CSV_COLUMN_ALIASES.type);
-    const rawDescription = pick(record, CSV_COLUMN_ALIASES.description);
-    const rawCategory = pick(record, CSV_COLUMN_ALIASES.category);
-    const rawSourceAccount = pick(record, CSV_COLUMN_ALIASES.sourceAccount);
-    const rawDestinationAccount = pick(record, CSV_COLUMN_ALIASES.destinationAccount);
-    const rawVisibility = pick(record, CSV_COLUMN_ALIASES.visibility);
-    const rawPaidBy = pick(record, CSV_COLUMN_ALIASES.paidBy);
-    const rawBeneficiarySplit = pick(record, CSV_COLUMN_ALIASES.beneficiarySplit);
-    const rawMerchant = pick(record, CSV_COLUMN_ALIASES.merchant);
-    const rawTags = pick(record, CSV_COLUMN_ALIASES.tags);
-    const rawNotes = pick(record, CSV_COLUMN_ALIASES.notes);
-    const rawExternalId = pick(record, CSV_COLUMN_ALIASES.externalId);
-
-    // Parse values
-    const date = parseDateValue(rawDate);
-    const parsedAmount = parseMoney(rawAmount);
-    const description = rawDescription.trim();
-
-    // Validate required fields
-    if (!date) errors.push('Fecha inválida.');
-    if (parsedAmount == null) errors.push('Importe inválido.');
-    if (!description) errors.push('Descripción obligatoria.');
-
-    const type = parseTypeValue(rawType, parsedAmount ?? 0);
-    const visibility = parseVisibilityValue(rawVisibility);
-    const categoryResult = findCategory(rawCategory, type, input.categories);
-    if (!categoryResult.category) errors.push('No hay categorías disponibles.');
-    if (categoryResult.usedFallback && categoryResult.category) {
-      warnings.push(`Categoría no encontrada; se usará ${categoryResult.category.name}.`);
-    }
-
-    // Filter accounts by visibility
-    const visibleAccounts = input.accounts.filter(acc =>
-      acc.visibility === Visibility.SHARED || acc.ownerUserId === input.user.id
-    );
-
-    const sourceResult = findAccount(rawSourceAccount, visibleAccounts, input.defaultSourceAccountId);
-    if (sourceResult.usedFallback && sourceResult.account) {
-      warnings.push(`Cuenta origen no encontrada; se usará ${sourceResult.account.name}.`);
-    }
-
-    let destinationResult = findAccount(rawDestinationAccount, visibleAccounts, input.defaultDestinationAccountId);
-    if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
-        (!destinationResult.account || destinationResult.account.id === sourceResult.account?.id)) {
-      const alternative = visibleAccounts.find(acc =>
-        acc.id !== sourceResult.account?.id &&
-        (acc.type === 'SAVINGS' || acc.type === 'SHARED')
-      ) ?? visibleAccounts.find(acc => acc.id !== sourceResult.account?.id);
-      destinationResult = { account: alternative ?? null, usedFallback: true };
-    }
-    if (rawDestinationAccount && destinationResult.usedFallback && destinationResult.account) {
-      warnings.push(`Cuenta destino no encontrada; se usará ${destinationResult.account.name}.`);
-    }
-
-    // Validate accounts per transaction type
-    if ((type === TransactionType.EXPENSE || type === TransactionType.INCOME || type === TransactionType.ADJUSTMENT) &&
-        !sourceResult.account) {
-      errors.push('Falta cuenta origen.');
-    }
-    if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
-        (!sourceResult.account || !destinationResult.account)) {
-      errors.push('Faltan cuenta origen y destino.');
-    }
-    if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
-        sourceResult.account?.id === destinationResult.account?.id) {
-      errors.push('La cuenta origen y destino no pueden ser la misma.');
-    }
-
-    // Parse paid by
-    const paidByUser = rawPaidBy
-      ? findUser(input.users, rawPaidBy)
-      : input.users.find(u => u.id === input.user.id);
-    if (rawPaidBy && !paidByUser) warnings.push('Pagador no encontrado; se usará el usuario actual.');
-
-    // Parse beneficiary splits
-    const parsedSplits = parseBeneficiarySplits(rawBeneficiarySplit, input.users);
-    warnings.push(...parsedSplits.warnings);
-    const beneficiarySplits = parsedSplits.splits ?? defaultSplits({
-      visibility,
+    const draftResult = buildImportDraft({
+      normalized,
+      categories: input.categories,
+      accounts: input.accounts,
       users: input.users,
       actorUserId: input.user.id,
       sharedSplit: input.sharedSplit,
+      defaultSourceAccountId: input.defaultSourceAccountId,
+      defaultDestinationAccountId: input.defaultDestinationAccountId,
     });
 
-    // Build draft
-    const draft: ImportDraft = {
-      type,
-      date: date ?? '1970-01-01',
-      amount: type === TransactionType.ADJUSTMENT ? toMoney(parsedAmount ?? 0) : Math.abs(toMoney(parsedAmount ?? 0)),
-      description,
-      categoryId: categoryResult.category?.id ?? '',
-      sourceAccountId: sourceResult.account?.id ?? null,
-      destinationAccountId: (type === TransactionType.SAVING || type === TransactionType.TRANSFER)
-        ? destinationResult.account?.id ?? null
-        : null,
-      visibility,
-      paidByUserId: paidByUser?.id ?? input.user.id,
-      beneficiarySplits,
-      merchantName: rawMerchant || null,
-      tags: splitTags(rawTags),
-      notes: rawNotes || null,
-    };
+    const hasIdentity = normalized.date != null && normalized.amountCents != null;
+    const absCents = normalized.amountCents == null ? null : Math.abs(normalized.amountCents);
 
-    // Validate against schema
-    const schemaResult = createTransactionSchema.safeParse(draft);
-    if (!schemaResult.success) {
-      errors.push(...schemaResult.error.issues.map(issue => issue.message));
-    }
+    const fingerprint = hasIdentity
+      ? computeImportFingerprint({
+          date: normalized.date!,
+          type: draftResult.draft?.type ?? normalized.type,
+          amountCents: absCents!,
+          description: draftResult.draft?.description ?? normalized.description,
+          sourceAccountName: draftResult.sourceAccountName || normalized.rawSourceAccount,
+          destinationAccountName: draftResult.destinationAccountName || normalized.rawDestinationAccount,
+          merchant: normalized.rawMerchant,
+        })
+      : '';
 
-    // Validate splits
-    try {
-      const { assertSplitTotal } = require('./splits.js');
-      assertSplitTotal(beneficiarySplits);
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : 'El reparto debe sumar 100%.');
-    }
+    const externalId = normalized.rawExternalId || null;
+    const idempotencyKey = externalId ?? fingerprint;
 
-    // Generate source hash
-    const sourceHash = makeSourceHash({
-      externalId: rawExternalId,
-      draft: {
-        type: draft.type,
-        date: draft.date,
-        amount: draft.amount,
-        description: draft.description,
-        categoryId: draft.categoryId,
-        sourceAccountId: draft.sourceAccountId ?? null,
-        destinationAccountId: draft.destinationAccountId ?? null,
-        merchantName: draft.merchantName ?? null,
-      },
-      categoryLabel: rawCategory || categoryResult.category?.slug || '',
-      sourceAccountLabel: rawSourceAccount || sourceResult.account?.name || '',
-      destinationAccountLabel: rawDestinationAccount || destinationResult.account?.name || '',
-    });
+    const reconciliation: ReconciliationDecision = hasIdentity
+      ? classifyImportRow({
+          fingerprint,
+          externalId,
+          date: normalized.date!,
+          amountCents: absCents!,
+          context: input.classificationContext,
+        })
+      : {
+          classification: ImportClassification.NEW,
+          reason: 'Fila con fecha o importe no válido; no se puede clasificar.',
+        };
+
+    const errors = draftResult.errors;
+    const warnings = draftResult.warnings;
+    const classification = reconciliation.classification;
+
+    let suggestedAction: ImportSuggestedAction;
+    if (errors.length) suggestedAction = 'skip';
+    else if (classification === ImportClassification.DUPLICATE_EXACT) suggestedAction = 'skip';
+    else if (classification === ImportClassification.DUPLICATE_CANDIDATE) suggestedAction = 'review';
+    else suggestedAction = 'import';
+
+    const draft = errors.length ? null : draftResult.draft;
+    const status: CsvPreviewRow['status'] = errors.length
+      ? 'error'
+      : classification === ImportClassification.DUPLICATE_EXACT
+        ? 'duplicate'
+        : 'ready';
 
     return {
       rowNumber,
-      status: errors.length ? 'error' : 'ready',
-      duplicate: false,
-      sourceHash,
-      warnings,
+      normalized,
+      draft,
+      fingerprint,
+      idempotencyKey,
+      reconciliation,
       errors,
-      draft: errors.length ? null : draft,
+      warnings,
+      suggestedAction,
+      status,
+      duplicate: classification === ImportClassification.DUPLICATE_EXACT,
+      sourceHash: fingerprint,
       display: {
-        date,
-        type,
-        typeLabel: typeLabels[type],
-        amount: parsedAmount == null ? null : draft.amount,
-        description,
-        category: categoryResult.category?.name ?? rawCategory,
-        sourceAccount: sourceResult.account?.name ?? rawSourceAccount,
-        destinationAccount: destinationResult.account?.name ?? rawDestinationAccount,
-        visibility,
+        date: normalized.date,
+        type: draftResult.draft?.type ?? normalized.type,
+        typeLabel: typeLabels[draftResult.draft?.type ?? normalized.type],
+        amount: normalized.amountCents == null ? null : (draft?.amount ?? fromCents(absCents!)),
+        description: draftResult.draft?.description ?? normalized.description,
+        category: draftResult.categoryName,
+        sourceAccount: draftResult.sourceAccountName || normalized.rawSourceAccount,
+        destinationAccount: draftResult.destinationAccountName || normalized.rawDestinationAccount,
+        visibility: draftResult.draft?.visibility ?? normalized.visibility,
       },
     };
   });
-
-  // Check for duplicates against existing hashes
-  // (In real implementation, this would query the database)
-  // For now, we just return the rows as-is
 
   const warningsCount = rows.reduce((sum, row) => sum + row.warnings.length, 0);
 
   return {
     rows,
     importBatch: {
-      id: '', // Will be generated by API
+      id: '', // Filled by the API
       status: 'PREVIEWED',
       rowsCount: rows.length,
       warningsCount,
@@ -473,7 +789,7 @@ export function transactionsToCsv(transactions: Array<{
   const headers = [
     'date', 'type', 'amount_eur', 'description',
     'source_account', 'destination_account', 'category', 'visibility',
-    'paid_by_email', 'beneficiary_split', 'merchant', 'tags', 'notes'
+    'paid_by_email', 'beneficiary_split', 'merchant', 'tags', 'notes', 'external_id'
   ];
 
   const rows = transactions.map(tx => [
@@ -490,11 +806,8 @@ export function transactionsToCsv(transactions: Array<{
     tx.merchant?.name ?? '',
     tx.tags?.join('|') ?? '',
     tx.notes ?? '',
+    '',
   ].map(escape));
 
   return [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
-}
-
-function toMoney(value: number): number {
-  return Number(Number(value).toFixed(2));
 }

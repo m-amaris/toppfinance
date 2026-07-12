@@ -20,6 +20,7 @@ export {
   TransactionType,
   BudgetScope,
   ImportStatus,
+  ImportClassification,
   LogLevel,
   LogCategory,
   BackupStatus,
@@ -32,6 +33,7 @@ export {
   isBudgetScope,
   isUserRole,
   isImportStatus,
+  isImportClassification,
   isLogLevel,
   isLogCategory,
   isBackupStatus,
@@ -98,7 +100,6 @@ export {
   adminChangePasswordBodySchema,
   DEFAULT_CATEGORIES,
   DEFAULT_SHARED_SPLIT,
-  DEFAULT_CURRENCY,
   DEFAULT_LOCALE,
 } from './schemas.js';
 
@@ -179,7 +180,27 @@ export {
   absMoney,
   clampMoney,
   compareMoney,
+  bankersRound,
+  normalizeMoneyInput,
+  parseCsvMoney,
+  sameMoney,
+  allocateByPercent,
+  centsToDisplay,
 } from './money.js';
+
+// ─── Currency utilities ───────────────────────────────────────────────────────
+export {
+  DEFAULT_CURRENCY,
+  SUPPORTED_CURRENCIES,
+  isCurrencySupported,
+  normalizeCurrency,
+  assertCurrencySupported,
+  isDefaultCurrency,
+  getDefaultCurrency,
+  CURRENCY_INFO,
+  getCurrencyInfo,
+} from './currency.js';
+export type { CurrencyCode, CurrencyInfo } from './currency.js';
 
 // ─── Date utilities ───────────────────────────────────────────────────────────
 export {
@@ -259,17 +280,35 @@ export {
   FALLBACK_CATEGORY_BY_TYPE,
   detectDelimiter,
   parseCsv,
+  parseCsvRows,
   pick,
   parseTypeValue,
   parseVisibilityValue,
   splitTags,
   findCategory,
   findAccount,
+  normalizeCsvRow,
+  buildImportDraft,
+  computeImportFingerprint,
+  classifyImportRow,
   buildPreviewRows,
   validateCommitBody,
   transactionsToCsv,
 } from './csv.js';
-export type { CsvRecord, ImportDraft, CsvPreviewRow, BuildPreviewRowsInput, BuildPreviewRowsOutput } from './csv.js';
+export type {
+  CsvRecord,
+  ImportDraft,
+  CsvPreviewRow,
+  BuildPreviewRowsInput,
+  BuildPreviewRowsOutput,
+  NormalizedImportRow,
+  ReconciliationDecision,
+  ClassifiedImportRow,
+  ImportClassificationContext,
+  ImportSuggestedAction,
+  BuildImportDraftInput,
+  BuildImportDraftResult,
+} from './csv.js';
 
 // ─── AI utilities ─────────────────────────────────────────────────────────────
 export {

@@ -111,10 +111,14 @@ export function Transacciones() {
 
           {csvPreview && (
             <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-4 gap-2 text-center">
+              <div className="grid grid-cols-5 gap-2 text-center">
                 <div className="rounded-lg bg-[var(--color-surface-offset)] px-2 py-2">
                   <p className="text-sm font-bold">{csvPreview.summary.ready}</p>
                   <p className="text-[10px] text-[var(--color-text-muted)]">Listas</p>
+                </div>
+                <div className="rounded-lg bg-[var(--color-surface-offset)] px-2 py-2">
+                  <p className="text-sm font-bold">{csvPreview.rows.filter(row => row.suggestedAction === 'review').length}</p>
+                  <p className="text-[10px] text-[var(--color-text-muted)]">Revisar</p>
                 </div>
                 <div className="rounded-lg bg-[var(--color-surface-offset)] px-2 py-2">
                   <p className="text-sm font-bold">{csvPreview.summary.duplicates}</p>
@@ -131,20 +135,33 @@ export function Transacciones() {
               </div>
 
               <div className="max-h-48 overflow-auto rounded-lg border border-[var(--color-divider)] divide-y divide-[var(--color-divider)]">
-                {csvPreview.rows.slice(0, 8).map(row => (
-                  <div key={`${row.rowNumber}-${row.sourceHash}`} className="px-3 py-2 text-xs flex items-start gap-2">
-                    <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${row.status === 'error' ? 'bg-[var(--color-error)]' : row.duplicate ? 'bg-[#d19900]' : 'bg-[var(--color-success)]'}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium truncate">{row.display.description || `Fila ${row.rowNumber}`}</p>
-                      <p className="text-[var(--color-text-muted)] truncate">
-                        {row.display.date || 'Sin fecha'} · {row.display.typeLabel} · {row.display.amount == null ? 'Importe invalido' : formatEsNumber(row.display.amount, { suffix: '€' })}
-                      </p>
-                      {(row.errors.length > 0 || row.warnings.length > 0) && (
-                        <p className="text-[10px] text-[var(--color-text-faint)] truncate">{[...row.errors, ...row.warnings].join(' ')}</p>
-                      )}
+                {csvPreview.rows.slice(0, 8).map(row => {
+                  const dotClass = row.status === 'error'
+                    ? 'bg-[var(--color-error)]'
+                    : row.suggestedAction === 'review'
+                      ? 'bg-[#006494]'
+                      : row.duplicate
+                        ? 'bg-[#d19900]'
+                        : 'bg-[var(--color-success)]'
+                  const reason = row.reconciliation?.reason
+                  return (
+                    <div key={`${row.rowNumber}-${row.sourceHash}`} className="px-3 py-2 text-xs flex items-start gap-2">
+                      <span className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${dotClass}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{row.display.description || `Fila ${row.rowNumber}`}</p>
+                        <p className="text-[var(--color-text-muted)] truncate">
+                          {row.display.date || 'Sin fecha'} · {row.display.typeLabel} · {row.display.amount == null ? 'Importe invalido' : formatEsNumber(row.display.amount, { suffix: '€' })}
+                        </p>
+                        {reason && (
+                          <p className="text-[10px] truncate text-[#d19900]">{reason}</p>
+                        )}
+                        {(row.errors.length > 0 || row.warnings.length > 0) && (
+                          <p className="text-[10px] text-[var(--color-text-faint)] truncate">{[...row.errors, ...row.warnings].join(' ')}</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
 
               <div className="grid grid-cols-2 gap-2">

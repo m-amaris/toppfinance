@@ -1,35 +1,32 @@
 import type { FastifyInstance } from 'fastify'
-import { Visibility } from '@prisma/client'
-import { parse } from 'csv-parse/sync'
+import { Prisma } from '@prisma/client'
 import {
+  absMoney,
   accountVisibilityWhere,
   assertSplitTotal,
   buildAccountEntries,
-  CSV_COLUMN_ALIASES,
+  buildPreviewRows,
+  computeImportFingerprint,
   createTransactionSchema,
   csvCommitBodySchema as sharedCsvCommitBodySchema,
   csvCommitParamsSchema,
   csvPreviewBodySchema as sharedCsvPreviewBodySchema,
   dateOnly,
-  defaultSplits,
-  FALLBACK_CATEGORY_BY_TYPE,
-  findAccount,
-  findCategory,
-  findUser,
-  makeSourceHash,
-  parseBeneficiarySplits,
+  fromCents,
+  normalizeCsvRow,
   parseCsv,
-  parseDateValue,
-  parseMoney,
-  parseTypeValue,
-  parseVisibilityValue,
-  splitTags,
+  toCents,
+  toIsoDateString,
   toMoney,
   TransactionType,
-  TRANSACTION_TYPE_LABELS,
+  Visibility,
+} from '@toppfinance/shared'
+import type {
+  AuthUser,
+  CreateTransactionInput,
+  ImportClassificationContext,
 } from '@toppfinance/shared'
 import { requireAuth } from './auth.js'
-import type { AuthUser, ImportDraft } from '@toppfinance/shared'
 import { prisma } from './db.js'
 import { auditLog } from './logging.js'
 
@@ -37,236 +34,80 @@ import { auditLog } from './logging.js'
 export const csvPreviewBodySchema = sharedCsvPreviewBodySchema
 export const csvCommitBodySchema = sharedCsvCommitBodySchema
 
-type CsvRecord = Record<string, unknown>
+/**
+ * Builds the DB lookup data injected into the pure classification stage.
+ * @see docs/financial-domain.md (idempotency / reconciliation)
+ *
+ * - fingerprints / externalIds: existing rows keyed by their idempotency key → id.
+ * - candidates: existing transactions keyed by ABSOLUTE cents, listing their
+ *   (date, id). Scoped to the absolute-cent magnitudes present in the incoming
+ *   CSV, so we never scan the whole ledger — only amounts that could actually match.
+ */
+async function buildClassificationContext(
+  householdId: string,
+  incomingAbsCents: ReadonlySet<number>,
+): Promise<ImportClassificationContext> {
+  const fingerprints = new Map<string, string>()
+  const externalIds = new Map<string, string>()
+  const candidates = new Map<number, Array<{ date: string; transactionId: string }>>()
 
-async function buildPreviewRows(input: {
-  user: AuthUser
-  fileName: string
-  content: string
-  defaultSourceAccountId?: string | null
-  defaultDestinationAccountId?: string | null
-}): Promise<import('@toppfinance/shared').BuildPreviewRowsOutput> {
-  const [categories, accounts, users, sharedSplit] = await Promise.all([
-    prisma.category.findMany({ where: { householdId: input.user.householdId, archived: false } }),
-    prisma.account.findMany({
-      where: accountVisibilityWhere(input.user.id, input.user.householdId),
-      orderBy: [{ visibility: 'asc' }, { name: 'asc' }],
+  // Candidate scope: stored amounts equal to ±each incoming magnitude.
+  // Non-ADJUSTMENT rows are stored positive; ADJUSTMENT keeps the sign, so we
+  // probe both +c and -c for every incoming absolute magnitude.
+  const candidateAmounts = incomingAbsCents.size
+    ? [...incomingAbsCents].flatMap(cents => [fromCents(cents), fromCents(-cents)])
+    : []
+
+  const [idRows, candidateRows] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        householdId,
+        OR: [{ fingerprint: { not: null } }, { externalId: { not: null } }],
+      },
+      select: { id: true, fingerprint: true, externalId: true },
     }),
-    prisma.user.findMany({
-      where: { householdId: input.user.householdId, active: true },
-      orderBy: { displayName: 'asc' },
-      select: { id: true, email: true, displayName: true },
-    }),
-    getSharedSplitFromDb(input.user.householdId),
+    candidateAmounts.length
+      ? prisma.transaction.findMany({
+          where: { householdId, amount: { in: candidateAmounts } },
+          select: { id: true, date: true, amount: true },
+        })
+      : Promise.resolve([]),
   ])
 
-  const records = parseCsv(input.content)
-
-  const rows: import('@toppfinance/shared').CsvPreviewRow[] = records.map((record, index) => {
-    const rowNumber = index + 2
-    const warnings: string[] = []
-    const errors: string[] = []
-
-    // Extract raw values using shared CSV_COLUMN_ALIASES
-    const rawDate = (record as any)[CSV_COLUMN_ALIASES.date[0]] ?? ''
-    const rawAmount = (record as any)[CSV_COLUMN_ALIASES.amount[0]] ?? ''
-    const rawType = (record as any)[CSV_COLUMN_ALIASES.type[0]] ?? ''
-    const rawDescription = (record as any)[CSV_COLUMN_ALIASES.description[0]] ?? ''
-    const rawCategory = (record as any)[CSV_COLUMN_ALIASES.category[0]] ?? ''
-    const rawSourceAccount = (record as any)[CSV_COLUMN_ALIASES.sourceAccount[0]] ?? ''
-    const rawDestinationAccount = (record as any)[CSV_COLUMN_ALIASES.destinationAccount[0]] ?? ''
-    const rawVisibility = (record as any)[CSV_COLUMN_ALIASES.visibility[0]] ?? ''
-    const rawPaidBy = (record as any)[CSV_COLUMN_ALIASES.paidBy[0]] ?? ''
-    const rawBeneficiarySplit = (record as any)[CSV_COLUMN_ALIASES.beneficiarySplit[0]] ?? ''
-    const rawMerchant = (record as any)[CSV_COLUMN_ALIASES.merchant[0]] ?? ''
-    const rawTags = (record as any)[CSV_COLUMN_ALIASES.tags[0]] ?? ''
-    const rawNotes = (record as any)[CSV_COLUMN_ALIASES.notes[0]] ?? ''
-    const rawExternalId = (record as any)[CSV_COLUMN_ALIASES.externalId[0]] ?? ''
-
-    // Parse values
-    const date = parseDateValue(rawDate)
-    const parsedAmount = parseMoney(rawAmount)
-    const description = rawDescription.trim()
-
-    // Validate required fields
-    if (!date) errors.push('Fecha inválida.')
-    if (parsedAmount == null) errors.push('Importe inválido.')
-    if (!description) errors.push('Descripción obligatoria.')
-
-    const type = parseTypeValue(rawType, parsedAmount ?? 0)
-    const visibility = parseVisibilityValue(rawVisibility)
-    const categoryResult = findCategory(rawCategory, type, categories as any)
-    if (!categoryResult.category) errors.push('No hay categorías disponibles.')
-    if (categoryResult.usedFallback && categoryResult.category) {
-      warnings.push(`Categoría no encontrada; se usará ${categoryResult.category.name}.`)
-    }
-
-    // Filter accounts by visibility
-    const visibleAccounts = accounts.filter(acc =>
-      acc.visibility === Visibility.SHARED || acc.ownerUserId === input.user.id
-    )
-
-    const sourceResult = findAccount(rawSourceAccount, visibleAccounts, input.defaultSourceAccountId)
-    if (sourceResult.usedFallback && sourceResult.account) warnings.push(`Cuenta origen no encontrada; se usará ${sourceResult.account.name}.`)
-
-    let destinationResult = findAccount(rawDestinationAccount, visibleAccounts, input.defaultDestinationAccountId)
-    if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
-        (!destinationResult.account || destinationResult.account?.id === sourceResult.account?.id)) {
-      const alternative = visibleAccounts.find(acc =>
-        acc.id !== sourceResult.account?.id &&
-        (acc.type === 'SAVINGS' || acc.type === 'SHARED')
-      ) ?? visibleAccounts.find(acc => acc.id !== sourceResult.account?.id)
-      destinationResult = { account: alternative ?? null, usedFallback: true }
-    }
-    if (rawDestinationAccount && destinationResult.usedFallback && destinationResult.account) {
-      warnings.push(`Cuenta destino no encontrada; se usará ${destinationResult.account.name}.`)
-    }
-
-    // Validate accounts per transaction type
-    if ((type === TransactionType.EXPENSE || type === TransactionType.INCOME || type === TransactionType.ADJUSTMENT) &&
-        !sourceResult.account) {
-      errors.push('Falta cuenta origen.')
-    }
-    if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
-        (!sourceResult.account || !destinationResult.account)) {
-      errors.push('Faltan cuenta origen y destino.')
-    }
-    if ((type === TransactionType.SAVING || type === TransactionType.TRANSFER) &&
-        sourceResult.account?.id === destinationResult.account?.id) {
-      errors.push('La cuenta origen y destino no pueden ser la misma.')
-    }
-
-    // Parse paid by
-    const paidByUser = rawPaidBy ? findUser(users, rawPaidBy) : users.find(u => u.id === input.user.id)
-    if (rawPaidBy && !paidByUser) warnings.push('Pagador no encontrado; se usará el usuario actual.')
-
-    // Parse beneficiary splits
-    const parsedSplits = parseBeneficiarySplits(rawBeneficiarySplit, users)
-    warnings.push(...parsedSplits.warnings)
-    const beneficiarySplits = parsedSplits.splits ?? defaultSplits({
-      visibility,
-      users,
-      actorUserId: input.user.id,
-      sharedSplit,
-    })
-
-    // Build draft
-    const draft: ImportDraft = {
-      type,
-      date: date ?? '1970-01-01',
-      amount: type === TransactionType.ADJUSTMENT ? toMoney(parsedAmount ?? 0) : Math.abs(toMoney(parsedAmount ?? 0)),
-      description,
-      categoryId: categoryResult.category?.id ?? '',
-      sourceAccountId: sourceResult.account?.id ?? null,
-      destinationAccountId: (type === TransactionType.SAVING || type === TransactionType.TRANSFER)
-        ? destinationResult.account?.id ?? null
-        : null,
-      visibility,
-      paidByUserId: paidByUser?.id ?? input.user.id,
-      beneficiarySplits,
-      merchantName: rawMerchant || null,
-      tags: splitTags(rawTags),
-      notes: rawNotes || null,
-    }
-
-    // Validate against schema
-    const schemaResult = createTransactionSchema.safeParse(draft)
-    if (!schemaResult.success) {
-      errors.push(...schemaResult.error.issues.map(issue => issue.message))
-    }
-
-    // Validate splits
-    try {
-      assertSplitTotal(beneficiarySplits)
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : 'El reparto debe sumar 100%.')
-    }
-
-    // Generate source hash
-    const sourceHash = makeSourceHash({
-      externalId: rawExternalId,
-      draft: {
-        type: draft.type,
-        date: draft.date,
-        amount: draft.amount,
-        description: draft.description,
-        categoryId: draft.categoryId,
-        sourceAccountId: draft.sourceAccountId ?? null,
-        destinationAccountId: draft.destinationAccountId ?? null,
-        merchantName: draft.merchantName ?? null,
-      },
-      categoryLabel: rawCategory || categoryResult.category?.slug || '',
-      sourceAccountLabel: rawSourceAccount || sourceResult.account?.name || '',
-      destinationAccountLabel: rawDestinationAccount || destinationResult.account?.name || '',
-    })
-
-    return {
-      rowNumber,
-      status: (errors.length ? 'error' : 'ready') as 'error' | 'ready',
-      duplicate: false,
-      sourceHash,
-      warnings,
-      errors,
-      draft: errors.length ? null : draft,
-      display: {
-        date,
-        type,
-        typeLabel: TRANSACTION_TYPE_LABELS[type],
-        amount: parsedAmount == null ? null : draft.amount,
-        description,
-        category: categoryResult.category?.name ?? rawCategory,
-        sourceAccount: sourceResult.account?.name ?? rawSourceAccount,
-        destinationAccount: destinationResult.account?.name ?? rawDestinationAccount,
-        visibility,
-      },
-    }
-  })
-
-  // Check for duplicates against existing hashes
-  const hashes = rows.filter(row => row.draft).map(row => row.sourceHash)
-  const existingHashes = new Set((await prisma.transaction.findMany({
-    where: { householdId: input.user.householdId, sourceHash: { in: hashes } },
-    select: { sourceHash: true },
-  })).map(row => row.sourceHash).filter(Boolean) as string[])
-
-  const rowsWithDupes: import('@toppfinance/shared').CsvPreviewRow[] = rows.map(row => {
-    if (row.draft && existingHashes.has(row.sourceHash)) {
-      return {
-        ...row,
-        status: 'duplicate' as const,
-        duplicate: true,
-        warnings: [...row.warnings, 'Posible duplicado ya existente.'],
-      }
-    }
-    return row
-  })
-
-  const warningsCount = rowsWithDupes.reduce((sum, row) => sum + row.warnings.length, 0)
-
-  return {
-    rows: rowsWithDupes,
-    importBatch: {
-      id: '',
-      status: 'PREVIEWED',
-      rowsCount: rowsWithDupes.length,
-      warningsCount,
-    },
-    summary: {
-      total: rowsWithDupes.length,
-      ready: rowsWithDupes.filter(r => r.status === 'ready').length,
-      duplicates: rowsWithDupes.filter(r => r.duplicate).length,
-      errors: rowsWithDupes.filter(r => r.status === 'error').length,
-      warnings: warningsCount,
-    },
+  for (const row of idRows) {
+    if (row.fingerprint) fingerprints.set(row.fingerprint, row.id)
+    if (row.externalId) externalIds.set(row.externalId, row.id)
   }
+
+  for (const row of candidateRows) {
+    const cents = Math.abs(toCents(Number(row.amount)))
+    let list = candidates.get(cents)
+    if (!list) {
+      list = []
+      candidates.set(cents, list)
+    }
+    list.push({ date: toIsoDateString(row.date), transactionId: row.id })
+  }
+
+  return { fingerprints, externalIds, candidates }
+}
+
+/**
+ * Returns true when `error` is a Prisma unique-constraint violation (P2002),
+ * e.g. a fingerprint or externalId already exists for this household. These are
+ * treated as duplicate skips, not import failures.
+ */
+function isPrismaUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
 }
 
 async function createImportedTransaction(input: {
   user: AuthUser
   importBatchId: string
-  sourceHash: string
-  draft: ImportDraft
+  draft: CreateTransactionInput
+  fingerprint: string
 }) {
+  // Re-validate server-side; never trust the client draft blindly.
   const body = createTransactionSchema.parse(input.draft)
   assertSplitTotal(body.beneficiarySplits)
 
@@ -315,7 +156,7 @@ async function createImportedTransaction(input: {
         householdId: input.user.householdId,
         type: body.type,
         date: dateOnly(body.date),
-        amount: body.type === 'ADJUSTMENT' ? toMoney(body.amount) : Math.abs(toMoney(body.amount)),
+        amount: body.type === 'ADJUSTMENT' ? toMoney(body.amount) : absMoney(body.amount),
         description: body.description,
         categoryId: body.categoryId,
         merchantId: merchant?.id ?? null,
@@ -326,7 +167,9 @@ async function createImportedTransaction(input: {
         createdByUserId: input.user.id,
         notes: body.notes ?? null,
         importBatchId: input.importBatchId,
-        sourceHash: input.sourceHash,
+        externalId: body.externalId ?? null,
+        fingerprint: input.fingerprint,
+        sourceHash: input.fingerprint,
         beneficiaries: {
           create: body.beneficiarySplits.map(split => ({
             userId: split.userId,
@@ -338,7 +181,7 @@ async function createImportedTransaction(input: {
 
     const entries = buildAccountEntries({
       transactionId: created.id,
-      type: created.type as unknown as import('@toppfinance/shared').TransactionType,
+      type: created.type as unknown as TransactionType,
       amount: Number(created.amount),
       sourceAccountId: created.sourceAccountId,
       destinationAccountId: created.destinationAccountId,
@@ -370,12 +213,43 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
     const user = request.user!
     const body = sharedCsvPreviewBodySchema.parse(request.body)
 
-    const { rows, importBatch: previewBatch, summary: previewSummary } = await buildPreviewRows({
-      user,
+    const [categories, accounts, users, sharedSplit] = await Promise.all([
+      prisma.category.findMany({
+        where: { householdId: user.householdId, archived: false },
+        select: { id: true, slug: true, name: true, type: true },
+      }),
+      prisma.account.findMany({
+        where: accountVisibilityWhere(user.id, user.householdId),
+        select: { id: true, name: true, type: true, visibility: true, ownerUserId: true },
+        orderBy: [{ visibility: 'asc' }, { name: 'asc' }],
+      }),
+      prisma.user.findMany({
+        where: { householdId: user.householdId, active: true },
+        select: { id: true, email: true, displayName: true },
+        orderBy: { displayName: 'asc' },
+      }),
+      getSharedSplitFromDb(user.householdId),
+    ])
+
+    // Scope the candidate lookup to absolute-cent magnitudes present in the input.
+    const incomingAbsCents = new Set<number>()
+    for (const record of parseCsv(body.content)) {
+      const normalized = normalizeCsvRow(record)
+      if (normalized.amountCents != null) incomingAbsCents.add(Math.abs(normalized.amountCents))
+    }
+    const classificationContext = await buildClassificationContext(user.householdId, incomingAbsCents)
+
+    const { rows, summary } = await buildPreviewRows({
+      user: { id: user.id, householdId: user.householdId },
       fileName: body.fileName,
       content: body.content,
+      categories: categories as unknown as Array<{ id: string; slug: string; name: string; type: TransactionType }>,
+      accounts: accounts as unknown as Array<{ id: string; name: string; type: string; visibility: Visibility; ownerUserId: string | null }>,
+      users,
+      sharedSplit,
       defaultSourceAccountId: body.defaultSourceAccountId,
       defaultDestinationAccountId: body.defaultDestinationAccountId,
+      classificationContext,
     })
 
     const warningsCount = rows.reduce((sum, row) => sum + row.warnings.length, 0)
@@ -401,13 +275,7 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
 
     return {
       importBatch,
-      summary: {
-        total: rows.length,
-        ready: rows.filter(row => row.status === 'ready').length,
-        duplicates: rows.filter(row => row.duplicate).length,
-        errors: rows.filter(row => row.status === 'error').length,
-        warnings: warningsCount,
-      },
+      summary,
       rows,
     }
   })
@@ -422,17 +290,34 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
     })
     if (!importBatch) return reply.code(404).send({ error: 'Importacion no encontrada o ya confirmada' })
 
+    // Resolve account id → name so the fingerprint is recomputed server-side from
+    // the same canonical labels used during preview (server-authoritative idempotency key).
+    const accounts = await prisma.account.findMany({
+      where: accountVisibilityWhere(user.id, user.householdId),
+      select: { id: true, name: true },
+    })
+    const accountNameById = new Map(accounts.map(account => [account.id, account.name]))
+
     const createdIds: string[] = []
-    const skippedDuplicates: Array<{ rowNumber: number; sourceHash: string }> = []
+    const skippedDuplicates: Array<{ rowNumber: number; sourceHash: string; reason: string }> = []
     const failed: Array<{ rowNumber: number; error: string }> = []
+    const seenKeys = new Set<string>()
 
     for (const row of body.rows) {
-      const existing = await prisma.transaction.findFirst({
-        where: { householdId: user.householdId, sourceHash: row.sourceHash },
-        select: { id: true },
+      const draft = row.draft
+      const fingerprint = computeImportFingerprint({
+        date: draft.date,
+        type: draft.type,
+        amountCents: Math.abs(toCents(draft.amount)),
+        description: draft.description,
+        sourceAccountName: draft.sourceAccountId ? (accountNameById.get(draft.sourceAccountId) ?? '') : '',
+        destinationAccountName: draft.destinationAccountId ? (accountNameById.get(draft.destinationAccountId) ?? '') : '',
+        merchant: draft.merchantName ?? '',
       })
-      if (existing && !body.includeDuplicates) {
-        skippedDuplicates.push({ rowNumber: row.rowNumber, sourceHash: row.sourceHash })
+      const idempotencyKey = draft.externalId ?? fingerprint
+
+      if (!body.includeDuplicates && seenKeys.has(idempotencyKey)) {
+        skippedDuplicates.push({ rowNumber: row.rowNumber, sourceHash: fingerprint, reason: 'Repetido dentro del mismo lote.' })
         continue
       }
 
@@ -440,11 +325,16 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
         const created = await createImportedTransaction({
           user,
           importBatchId: importBatch.id,
-          sourceHash: row.sourceHash,
-          draft: row.draft,
+          draft,
+          fingerprint,
         })
+        seenKeys.add(idempotencyKey)
         createdIds.push(created.id)
       } catch (error) {
+        if (isPrismaUniqueViolation(error)) {
+          skippedDuplicates.push({ rowNumber: row.rowNumber, sourceHash: fingerprint, reason: 'Ya existe una transacción con este externalId o fingerprint.' })
+          continue
+        }
         failed.push({ rowNumber: row.rowNumber, error: error instanceof Error ? error.message : 'Error desconocido' })
       }
     }

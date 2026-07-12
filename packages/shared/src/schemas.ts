@@ -84,6 +84,9 @@ export const createTransactionSchema = z.object({
   merchantName: z.string().trim().max(120).optional().nullable(),
   tags: z.array(z.string().trim().min(1).max(40)).default([]),
   notes: z.string().trim().max(2000).optional().nullable(),
+  // Import idempotency: bank/external transaction id carried by the CSV draft.
+  // Optional for manual transactions; required semantics handled by the import pipeline.
+  externalId: z.string().trim().min(1).max(200).optional().nullable(),
 });
 
 export const updateTransactionSchema = createTransactionSchema.partial().extend({
@@ -451,5 +454,5 @@ export const DEFAULT_SHARED_SPLIT = {
   saraPercent: 50,
 } as const;
 
-export const DEFAULT_CURRENCY = 'EUR' as const;
+// DEFAULT_CURRENCY is defined in currency.ts (single source of truth).
 export const DEFAULT_LOCALE = 'es-ES' as const;

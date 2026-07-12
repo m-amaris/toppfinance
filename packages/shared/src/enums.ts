@@ -41,6 +41,17 @@ export enum ImportStatus {
   FAILED = 'FAILED',
 }
 
+/**
+ * Outcome of classifying a CSV import row against existing transactions.
+ * Prisma-facing enum equivalent is not required: this is an application enum
+ * computed by the shared import pipeline (see docs/financial-domain.md).
+ */
+export enum ImportClassification {
+  NEW = 'new',
+  DUPLICATE_EXACT = 'duplicate_exact',
+  DUPLICATE_CANDIDATE = 'duplicate_candidate',
+}
+
 export enum LogLevel {
   DEBUG = 'DEBUG',
   INFO = 'INFO',
@@ -106,6 +117,10 @@ export function isUserRole(value: string): value is UserRole {
 
 export function isImportStatus(value: string): value is ImportStatus {
   return Object.values(ImportStatus).includes(value as ImportStatus);
+}
+
+export function isImportClassification(value: string): value is ImportClassification {
+  return Object.values(ImportClassification).includes(value as ImportClassification);
 }
 
 export function isLogLevel(value: string): value is LogLevel {

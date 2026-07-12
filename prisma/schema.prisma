@@ -145,6 +145,8 @@ model Transaction {
   notes                String?
   importBatchId        String?
   sourceHash           String?
+  externalId           String?
+  fingerprint          String?
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
   accountEntries       AccountEntry[]
@@ -159,6 +161,8 @@ model Transaction {
   beneficiaries        TransactionBeneficiary[]
   tags                 TransactionTag[]
 
+  @@unique([householdId, externalId])
+  @@unique([householdId, fingerprint])
   @@index([householdId, date])
   @@index([householdId, visibility])
   @@index([sourceHash])

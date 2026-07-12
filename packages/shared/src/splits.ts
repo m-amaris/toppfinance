@@ -4,6 +4,7 @@
  * Derived types (SplitPart, BeneficiarySplit) live in types.ts.
  */
 
+import { createHash } from 'node:crypto';
 import { TransactionType, Visibility } from './enums.js';
 import { toMoney } from './money.js';
 
@@ -220,8 +221,9 @@ export function getSplitRequirement(type: TransactionType): TransactionSplitRequ
 }
 
 /**
- * Creates a source hash for duplicate detection.
+ * Creates a source hash for duplicate detection using SHA-256.
  * Used in CSV imports to detect duplicates.
+ * Delegates to the canonical computeImportFingerprint when available.
  */
 export function makeSourceHash(input: {
   externalId: string;
@@ -239,8 +241,6 @@ export function makeSourceHash(input: {
   sourceAccountLabel: string;
   destinationAccountLabel: string;
 }): string {
-  const { createHash } = require('node:crypto');
-
   const basis = input.externalId || JSON.stringify({
     type: input.draft.type,
     date: input.draft.date,

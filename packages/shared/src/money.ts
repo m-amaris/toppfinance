@@ -2,26 +2,59 @@
  * Money utilities.
  * All monetary values are handled as numbers with 2 decimal places precision.
  * Uses integer-cents internally where precision is critical.
+ *
+ * Rounding policy: Banker's rounding (round half to even).
+ * See docs/financial-domain.md for the full policy.
  */
 
 const DECIMAL_PLACES = 2;
 const MULTIPLIER = Math.pow(10, DECIMAL_PLACES);
 
 /**
- * Rounds a number to 2 decimal places (cents).
- * Uses toFixed to avoid floating point issues.
+ * Applies Banker's rounding (round half to even) to a scaled value.
+ * @param scaled - The value already multiplied by MULTIPLIER
+ * @returns The Banker-rounded value in the original scale
+ */
+export function bankersRound(scaled: number): number {
+  const rounded = Math.round(scaled);
+  // Exact .5 tie: Math.round floors negative halves toward zero (gives the
+  // ceiling) and positive halves toward +∞ (also the ceiling). The even
+  // neighbor of a half is therefore the floor = `rounded - 1`, regardless of
+  // sign. Moving by `Math.sign(rounded)` instead would step negative ties
+  // the wrong way (toward zero), producing the odd neighbor.
+  const isHalf = Math.abs(scaled - rounded) === 0.5;
+  if (isHalf && rounded % 2 !== 0) {
+    return (rounded - 1) / MULTIPLIER;
+  }
+  return Number((rounded / MULTIPLIER).toFixed(DECIMAL_PLACES));
+}
+
+/**
+ * Rounds a number to 2 decimal places using Banker's rounding.
  */
 export function toMoney(value: number | string): number {
   const num = typeof value === 'string' ? Number(value) : value;
   if (!Number.isFinite(num)) return 0;
-  return Number(num.toFixed(DECIMAL_PLACES));
+  return bankersRound(num * MULTIPLIER);
 }
 
 /**
  * Converts a money amount to integer cents (for precise arithmetic).
+ * Uses Banker's rounding.
  */
 export function toCents(value: number | string): number {
-  return Math.round(toMoney(value) * MULTIPLIER);
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(num)) return 0;
+  // Banker's rounding to integer cents. See bankersRound(): for an exact .5
+  // tie Math.round yields the ceiling neighbor, so the even neighbor is the
+  // floor = `rounded - 1` for both signs (Math.sign would break negatives).
+  const scaled = num * MULTIPLIER;
+  const rounded = Math.round(scaled);
+  const isHalf = Math.abs(scaled - rounded) === 0.5;
+  if (isHalf && rounded % 2 !== 0) {
+    return rounded - 1;
+  }
+  return rounded;
 }
 
 /**
@@ -177,4 +210,85 @@ export function compareMoney(a: number | string, b: number | string): number {
   if (diff < 0) return -1;
   if (diff > 0) return 1;
   return 0;
+}
+
+/**
+ * Normalizes a money input to a canonical number with 2 decimal places.
+ * Unlike toMoney, this returns 0 for NaN/Infinity and always rounds via Banker's.
+ */
+export function normalizeMoneyInput(value: number | string | null | undefined): number {
+  if (value == null) return 0;
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(num)) return 0;
+  return bankersRound(num * MULTIPLIER);
+}
+
+/**
+ * Parses a CSV money field (handles EU and US formats) and returns integer cents.
+ * This is the canonical entry point for CSV import amounts.
+ * Returns null if parsing fails or the value is not a valid money amount.
+ */
+export function parseCsvMoney(value: string): number | null {
+  const parsed = parseMoney(value);
+  if (parsed == null) return null;
+  return toCents(parsed);
+}
+
+/**
+ * Checks if two monetary values represent the same amount (exact cent comparison).
+ * Uses integer cents internally for precision.
+ */
+export function sameMoney(a: number | string, b: number | string): boolean {
+  return toCents(a) === toCents(b);
+}
+
+/**
+ * Allocates a monetary amount across parts by percentage, controlling remainder.
+ * Uses the "largest remainder" method to ensure the sum of allocated amounts
+ * exactly equals the original total (no rounding gaps).
+ *
+ * Returns an array of allocated amounts in cents matching the order of percents.
+ */
+export function allocateByPercent(
+  total: number | string,
+  percents: number[]
+): number[] {
+  const totalCents = toCents(total);
+  if (percents.length === 0) return [];
+  if (percents.length === 1) return [totalCents];
+
+  const totalPercent = percents.reduce((s, p) => s + p, 0);
+  if (Math.abs(totalPercent - 100) > 0.01) {
+    throw new Error('Los porcentajes deben sumar 100%');
+  }
+
+  // Calculate raw allocation
+  const raw = percents.map(p => (totalCents * p) / 100);
+  // Take integer part
+  const base = raw.map(r => Math.floor(r));
+  const remainder = raw.map((r, i) => r - base[i]);
+  let allocated = base.reduce((s, v) => s + v, 0);
+  let remaining = totalCents - allocated;
+
+  // Distribute remainder to highest fractional parts
+  const indices = remainder
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => b.r - a.r);
+
+  for (const { i } of indices) {
+    if (remaining <= 0) break;
+    base[i] += 1;
+    remaining -= 1;
+  }
+
+  return base;
+}
+
+/**
+ * Adds a new enum import/export for money-related helpers.
+ * Converts cents to a display string with currency symbol.
+ */
+export function centsToDisplay(cents: number, currency: string = 'EUR'): string {
+  const amount = fromCents(cents);
+  return formatMoney(amount, { currency });
 }
