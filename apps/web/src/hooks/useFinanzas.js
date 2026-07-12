@@ -19,6 +19,10 @@ import {
   mapApiCategory,
   monthKeyFromDate,
   toMoney,
+  TRANSACTION_TYPE_LOCAL_KEY,
+  LOCAL_KEY_TO_TRANSACTION_TYPE,
+  rangeMonths,
+  toIsoDateString,
 } from '@toppfinance/shared'
 
 export const FinanzasContext = createContext(null)
@@ -26,27 +30,16 @@ export const FinanzasContext = createContext(null)
 const API_ENABLED = typeof window !== 'undefined' && import.meta.env.MODE !== 'test'
 const DEFAULT_MONTH_KEY = '2026-06'
 const SAVINGS_COLOR = '#01696f'
+
+// Use shared mappings for api↔local transaction type conversion (phase 2 contract consolidation)
+const apiToLocalType = TRANSACTION_TYPE_LOCAL_KEY
+const localToApiType = LOCAL_KEY_TO_TRANSACTION_TYPE
+
 const gastoIdsBase = CATEGORIAS_GASTO.map(c => c.id)
 const ingresoIdsBase = CATEGORIAS_INGRESO.map(c => c.id)
 const ahorroIdsBase = CATEGORIAS_AHORRO.map(c => c.id)
 const transferenciaIdsBase = CATEGORIAS_TRANSFERENCIA.map(c => c.id)
 const ajusteIdsBase = CATEGORIAS_AJUSTE.map(c => c.id)
-
-const apiToLocalType = {
-  EXPENSE: 'gasto',
-  INCOME: 'ingreso',
-  SAVING: 'ahorro',
-  TRANSFER: 'transferencia',
-  ADJUSTMENT: 'ajuste',
-}
-
-const localToApiType = {
-  gasto: 'EXPENSE',
-  ingreso: 'INCOME',
-  ahorro: 'SAVING',
-  transferencia: 'TRANSFER',
-  ajuste: 'ADJUSTMENT',
-}
 
 function getInitialDarkMode() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
@@ -273,17 +266,9 @@ export function useFinanzasProvider() {
     if (transacciones.length === 0) return [remoteLoaded ? currentMonthKey() : DEFAULT_MONTH_KEY]
     const dates = transacciones.map(tx => new Date(tx.fecha + 'T12:00:00'))
     const minDate = new Date(Math.min(...dates))
-    const maxDate = new Date()
-
-    const keys = []
-    let cur = new Date(minDate.getFullYear(), minDate.getMonth(), 1)
-    const last = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1)
-
-    while (cur <= last) {
-      keys.push(`${cur.getFullYear()}-${pad(cur.getMonth() + 1)}`)
-      cur.setMonth(cur.getMonth() + 1)
-    }
-    return keys
+    const minDateIso = toIsoDateString(minDate)
+    const currentMonth = currentMonthKey()
+    return rangeMonths(minDateIso, currentMonth)
   }, [transacciones, remoteLoaded])
 
   const yearKeys = useMemo(() => {

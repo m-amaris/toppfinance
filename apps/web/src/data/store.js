@@ -48,10 +48,6 @@ function pad(n) {
   return String(n).padStart(2, '0')
 }
 
-function monthKey(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`
-}
-
 function isoDate(y, m, d) {
   return `${y}-${pad(m + 1)}-${pad(d)}`
 }

@@ -15,9 +15,11 @@ import {
   transactionFiltersSchema,
   updateTransactionSchema,
   updateCategorySchema,
-	entityIdParamsSchema,
-	aiInsightsBodySchema,
-	adminChangePasswordBodySchema,
+  entityIdParamsSchema,
+  aiInsightsBodySchema,
+  adminChangePasswordBodySchema,
+  TransactionType,
+  Visibility,
 } from '@toppfinance/shared'
 import { anonymizeTransactions, callOpenRouter, defaultAiSettings } from './ai.js'
 import { clearSessionCookie, requireAdmin, requireAuth, setSessionCookie } from './auth.js'
@@ -33,6 +35,7 @@ import {
   dateOnly,
   toMoney,
   transactionVisibilityWhere,
+  transactionsToCsv,
 } from '@toppfinance/shared'
 import { appLog, auditLog } from './logging.js'
 import { createSessionToken, hashIp, hashPassword, hashToken, LogLevel, LogCategory, verifyPassword } from '@toppfinance/shared'
@@ -325,30 +328,27 @@ app.get('/api/exports/history.csv', { preHandler: requireAuth }, async (request,
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   })
 
-  const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`
-  const rows = [
-    ['date', 'type', 'amount_eur', 'description', 'source_account', 'destination_account', 'category', 'visibility', 'paid_by_email', 'beneficiary_split', 'merchant', 'tags', 'notes'],
-    ...transactions.map(tx => [
-      tx.date.toISOString().slice(0, 10),
-      tx.type,
-      Number(tx.amount).toFixed(2).replace('.', ','),
-      tx.description,
-      tx.sourceAccount?.name ?? '',
-      tx.destinationAccount?.name ?? '',
-      tx.category.name,
-      tx.visibility,
-      tx.paidByUser?.email ?? '',
-      tx.beneficiaries.map(split => `${split.user.email}=${Number(split.percent)}`).join('|'),
-      tx.merchant?.name ?? '',
-      tx.tags.map(item => item.tag.name).join('|'),
-      tx.notes ?? '',
-    ]).map(row => row.map(escape)),
-  ]
+  const csvRows = transactions.map(tx => ({
+    date: tx.date,
+    type: tx.type as TransactionType,
+    amount: Number(tx.amount),
+    description: tx.description,
+    sourceAccount: tx.sourceAccount ? { name: tx.sourceAccount.name } : null,
+    destinationAccount: tx.destinationAccount ? { name: tx.destinationAccount.name } : null,
+    category: { name: tx.category.name },
+    visibility: tx.visibility as Visibility,
+    paidByUser: tx.paidByUser ? { email: tx.paidByUser.email } : null,
+    beneficiaries: tx.beneficiaries.map(b => ({ user: { email: b.user.email }, percent: Number(b.percent) })),
+    merchant: tx.merchant ? { name: tx.merchant.name } : null,
+    tags: tx.tags.map(t => t.tag.name),
+    notes: tx.notes ?? null,
+    externalId: tx.externalId ?? null,
+  }))
 
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'export', action: 'historyCsv' })
   reply.header('Content-Type', 'text/csv; charset=utf-8')
   reply.header('Content-Disposition', 'attachment; filename="toppfinance-history.csv"')
-  return rows.map(row => row.join(';')).join('\n')
+  return transactionsToCsv(csvRows)
 })
 
 app.get('/api/exports/history.json', { preHandler: requireAuth }, async request => {

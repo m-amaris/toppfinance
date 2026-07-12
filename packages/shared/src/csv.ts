@@ -186,6 +186,32 @@ export const TRANSACTION_TYPE_LABELS: Record<TransactionType, string> = {
 };
 
 /**
+ * Canonical mapping between the API `TransactionType` enum and the UI-local
+ * lowercase Spanish keys used by the web app ('gasto', 'ingreso', ...).
+ *
+ * This is the single source of truth for the api↔local translation; the web
+ * layer imports it instead of redefining its own `apiToLocalType`/`localToApiType`
+ * tables (phase 2 contract consolidation). The local keys themselves are a
+ * frontend display concern and are NOT an enum.
+ */
+export const TRANSACTION_TYPE_LOCAL_KEY: Record<TransactionType, string> = {
+  [TransactionType.EXPENSE]: 'gasto',
+  [TransactionType.INCOME]: 'ingreso',
+  [TransactionType.SAVING]: 'ahorro',
+  [TransactionType.TRANSFER]: 'transferencia',
+  [TransactionType.ADJUSTMENT]: 'ajuste',
+};
+
+/** Inverse of `TRANSACTION_TYPE_LOCAL_KEY` (local key → enum). */
+export const LOCAL_KEY_TO_TRANSACTION_TYPE: Record<string, TransactionType> = {
+  gasto: TransactionType.EXPENSE,
+  ingreso: TransactionType.INCOME,
+  ahorro: TransactionType.SAVING,
+  transferencia: TransactionType.TRANSFER,
+  ajuste: TransactionType.ADJUSTMENT,
+};
+
+/**
  * Fallback category slug by transaction type.
  */
 export const FALLBACK_CATEGORY_BY_TYPE: Record<TransactionType, string> = {
@@ -783,6 +809,8 @@ export function transactionsToCsv(transactions: Array<{
   merchant?: { name: string } | null;
   tags?: string[];
   notes?: string | null;
+  /** Optional: external ID for idempotency round-trip (bank transaction ID, fingerprint, etc.) */
+  externalId?: string | null;
 }>): string {
   const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
@@ -806,7 +834,7 @@ export function transactionsToCsv(transactions: Array<{
     tx.merchant?.name ?? '',
     tx.tags?.join('|') ?? '',
     tx.notes ?? '',
-    '',
+    tx.externalId ?? '',
   ].map(escape));
 
   return [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');

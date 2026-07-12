@@ -5,26 +5,31 @@
  * 1. No `import { z } from 'zod'` exists outside packages/shared
  * 2. No shared Request/Response types are defined outside packages/shared
  * 3. No `import * from './finance'` for functions that exist in @toppfinance/shared
- *
+ * 4. Rules apply to both API and Web layers
+
  * Usage: node scripts/check-contracts.mjs
  */
 
 import { readFileSync, existsSync } from 'node:fs'
 import { globSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
 // --- Configuration ---
-const ROOT = new URL('..', import.meta.url).pathname
-const SHARED_SRC = `${ROOT}packages/shared/src`
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const ROOT = resolve(__dirname, '..')
+const SHARED_SRC = resolve(ROOT, 'packages/shared/src')
 
 const ALLOWED_ZOD_FILES = new Set([
-  `${ROOT}packages/shared/src/schemas.ts`,
-  `${ROOT}packages/shared/src/csv.ts`,
-  `${ROOT}packages/shared/src/config.ts`,
+  resolve(SHARED_SRC, 'schemas.ts'),
+  resolve(SHARED_SRC, 'csv.ts'),
+  resolve(SHARED_SRC, 'config.ts'),
 ])
 
 // Files where z.infer<typeof ...> is allowed (type derivation from schemas)
 const ALLOWED_ZOD_INFER_FILES = new Set([
-  `${ROOT}packages/shared/src/types.ts`,
+  resolve(SHARED_SRC, 'types.ts'),
 ])
 
 // Shared functions that MUST NOT be re-exported from API layers
@@ -93,19 +98,22 @@ function checkFile(filePath) {
   }
 }
 
-// Walk all .ts files outside shared, PLUS shared types.ts for infer checks
+// Walk all .ts/.js/.jsx/.tsx files in api, web, and shared
 const apiFiles = globSync(`${ROOT}apps/api/src/**/*.ts`)
+const webFiles = globSync(`${ROOT}apps/web/src/**/*.{js,jsx,ts,tsx}`)
 const sharedSrcFiles = globSync(`${ROOT}packages/shared/src/**/*.ts`)
-const allFiles = [...apiFiles, ...sharedSrcFiles]
+const allFiles = [...apiFiles, ...webFiles, ...sharedSrcFiles]
 
 for (const file of allFiles) {
   checkFile(file)
 }
 
 // --- Check 2: No re-export of shared functions from ./finance ---
-console.log('\n🔍 Checking API layer imports shared functions directly (not via ./finance) ...')
+console.log('\n🔍 Checking API/web layers import shared functions directly (not via ./local) ...')
 
-for (const file of apiFiles) {
+const checkFiles = [...apiFiles, ...webFiles]
+
+for (const file of checkFiles) {
   const content = readFileSync(file, 'utf-8')
   const lines = content.split('\n')
   const relative = file.replace(ROOT, '')
