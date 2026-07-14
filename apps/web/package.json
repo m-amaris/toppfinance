@@ -4,11 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5175",
-    "build": "tsc -p tsconfig.node.json && vite build",
+    "dev": "npm run build -w @toppfinance/shared && vite --host 0.0.0.0 --port 5175",
+    "build": "npm run build -w @toppfinance/shared && tsc -p tsconfig.node.json && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4175",
-    "test": "vitest run",
-    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit"
+    "test": "npm run build -w @toppfinance/shared && vitest run",
+    "check": "npm run build -w @toppfinance/shared && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.2",

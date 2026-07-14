@@ -267,7 +267,7 @@ export function allocateByPercent(
   // Take integer part
   const base = raw.map(r => Math.floor(r));
   const remainder = raw.map((r, i) => r - base[i]);
-  let allocated = base.reduce((s, v) => s + v, 0);
+  const allocated = base.reduce((s, v) => s + v, 0);
   let remaining = totalCents - allocated;
 
   // Distribute remainder to highest fractional parts

@@ -128,7 +128,7 @@ describe('currency.ts — Currency utilities', () => {
     })
 
     it('narrows type in assertion', () => {
-      let code: string | CurrencyCode = 'EUR'
+      const code: string | CurrencyCode = 'EUR'
       assertCurrencySupported(code)
       // After assertion, TypeScript narrows to CurrencyCode
       const _typed: CurrencyCode = code

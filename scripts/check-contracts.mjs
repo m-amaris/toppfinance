@@ -13,7 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { globSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { dirname, resolve, join, relative, isAbsolute } from 'node:path'
 
 // --- Configuration ---
 const __filename = fileURLToPath(import.meta.url)
@@ -21,16 +21,15 @@ const __dirname = dirname(__filename)
 const ROOT = resolve(__dirname, '..')
 const SHARED_SRC = resolve(ROOT, 'packages/shared/src')
 
-const ALLOWED_ZOD_FILES = new Set([
-  resolve(SHARED_SRC, 'schemas.ts'),
-  resolve(SHARED_SRC, 'csv.ts'),
-  resolve(SHARED_SRC, 'config.ts'),
-])
-
-// Files where z.infer<typeof ...> is allowed (type derivation from schemas)
-const ALLOWED_ZOD_INFER_FILES = new Set([
-  resolve(SHARED_SRC, 'types.ts'),
-])
+// Zod usage (import / re-export / z.object / z.infer) is permitted anywhere
+// under packages/shared/src — the contract rule confines Zod to the shared
+// package, not to a specific subset of files within it. Files outside
+// shared/src (apps/api, apps/web) are flagged. This replaces a brittle 3-file
+// allowlist that silently passed when the glob path-join bug matched nothing.
+function isSharedSrcFile(filePath) {
+  const rel = relative(SHARED_SRC, filePath)
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
+}
 
 // Shared functions that MUST NOT be re-exported from API layers
 const SHARED_FUNCTIONS = new Set([
@@ -85,13 +84,13 @@ function checkFile(filePath) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (/import\s+\{[^}]*\bz\b[^}]*\}\s+from\s+['"]zod['"]/.test(line)) {
-      if (!ALLOWED_ZOD_FILES.has(filePath)) {
+      if (!isSharedSrcFile(filePath)) {
         error(relative, `Line ${i + 1}: Zod import found outside packages/shared`)
       }
     }
     // Also catch re-exports
     if (/export\s+\{[^}]*\bz\b[^}]*\}\s+from/.test(line)) {
-      if (!ALLOWED_ZOD_FILES.has(filePath)) {
+      if (!isSharedSrcFile(filePath)) {
         error(relative, `Line ${i + 1}: Zod re-export found outside packages/shared`)
       }
     }
@@ -99,9 +98,9 @@ function checkFile(filePath) {
 }
 
 // Walk all .ts/.js/.jsx/.tsx files in api, web, and shared
-const apiFiles = globSync(`${ROOT}apps/api/src/**/*.ts`)
-const webFiles = globSync(`${ROOT}apps/web/src/**/*.{js,jsx,ts,tsx}`)
-const sharedSrcFiles = globSync(`${ROOT}packages/shared/src/**/*.ts`)
+const apiFiles = globSync(join(ROOT, 'apps/api/src/**/*.ts'))
+const webFiles = globSync(join(ROOT, 'apps/web/src/**/*.{js,jsx,ts,tsx}'))
+const sharedSrcFiles = globSync(join(ROOT, 'packages/shared/src/**/*.ts'))
 const allFiles = [...apiFiles, ...webFiles, ...sharedSrcFiles]
 
 for (const file of allFiles) {
@@ -161,7 +160,7 @@ for (const file of allFiles) {
 
   for (let i = 0; i < lines.length; i++) {
     if (/z\.object\s*\(/.test(lines[i])) {
-      if (!ALLOWED_ZOD_FILES.has(file)) {
+      if (!isSharedSrcFile(file)) {
         error(relative, `Line ${i + 1}: inline z.object() found — move schema to packages/shared/src/schemas.ts and import the named schema`)
       }
     }
@@ -178,7 +177,7 @@ for (const file of allFiles) {
 
   for (let i = 0; i < lines.length; i++) {
     if (/z\.infer\s*</.test(lines[i])) {
-      if (!ALLOWED_ZOD_INFER_FILES.has(file)) {
+      if (!isSharedSrcFile(file)) {
         error(relative, `Line ${i + 1}: z.infer<> found — import the derived type from '@toppfinance/shared' instead`)
       }
     }

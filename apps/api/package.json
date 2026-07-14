@@ -7,7 +7,8 @@
     "dev": "npm run build -w @toppfinance/shared && tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "test": "vitest run --passWithNoTests",
+    "test": "npm run build -w @toppfinance/shared && vitest run --passWithNoTests",
+    "test:coverage": "npm run build -w @toppfinance/shared && vitest run --coverage",
     "check": "npm run build -w @toppfinance/shared && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -29,6 +30,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.1.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "testcontainers": "^12.0.4",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^4.1.10"

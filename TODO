@@ -9,7 +9,7 @@ FASES DE DESARROLLO DEL PROYECTO
 
 FASES DE MEJORA DEL PROYECTO
 
-Fase 0 — Crear una base verificable
+Fase 0 — Crear una base verificable @done(26-07-14)
 Objetivo: que los tests comprueben la aplicación real y que los comandos sean reproducibles.
 Extrae la creación de Fastify a apps/api/src/app.ts.
 Registra plugins, middleware, rutas y manejador de errores.
