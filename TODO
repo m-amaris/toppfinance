@@ -6,3 +6,147 @@ FASES DE DESARROLLO DEL PROYECTO
 ✔ 5. Web - Ordenar el frontend: Dejar clara la estrategia de routing, estado global y acceso a datos; separar vistas, lógica de dominio y componentes presentacionales. @done(26-07-13)
 ✔ 6. Calidad - Evitar regresiones: Subir mucho la cobertura de tests: utilidades monetarias, importadores CSV, Prisma, API, flujos críticos de UI. @done(26-07-13)
 ✔ 7. Operación - Preparar producción: Añadir preview, healthchecks, validación de backups restaurables, manejo de secretos y checklist de despliegue. @done(26-07-14)
+
+FASES DE MEJORA DEL PROYECTO
+
+Fase 0 — Crear una base verificable
+Objetivo: que los tests comprueben la aplicación real y que los comandos sean reproducibles.
+Extrae la creación de Fastify a apps/api/src/app.ts.
+Registra plugins, middleware, rutas y manejador de errores.
+server.ts debe limitarse a importar buildApp() y ejecutar listen().
+Los tests deben importar esa misma factory; elimina la duplicación de testApp.ts.
+Ajusta scripts:
+test debe ejecutar antes prisma generate o disponer de un cliente Prisma generado en CI.
+Añade ESLint y scripts lint, test:coverage.
+Añade un workflow CI: npm ci, db:generate, check:contracts, check, lint, test, build.
+Añade PostgreSQL real para integración.
+Usa una base temporal Docker/Testcontainers.
+Ejecuta migraciones y seed mínimos.
+Mantén mocks solo para unit tests aislados.
+Criterio de salida: un checkout limpio pasa todos los comandos sin depender de apps/web/dist ni de artefactos previos.
+
+Fase 1 — Reconectar frontend y API
+Objetivo: que la interfaz muestre exclusivamente datos reales.
+Centraliza el prefijo API en el cliente:
+Define const API_PREFIX = '/api/v1'.
+Actualiza todas las llamadas de /api/... a ${API_PREFIX}/....
+Unifica el contrato de respuesta.
+La API usa { data: ... }; el cliente debe desempaquetar ese nivel en request<T>().
+Define tipos compartidos para listados paginados y respuestas de cada endpoint.
+Corrige transactions, accounts, categories, auth y CSV.
+Elimina los fallbacks de demo en producción.
+Nunca sustituyas una respuesta vacía por transaccionesIniciales.
+Distingue explícitamente loading, error, empty y success.
+Conserva datos demo únicamente en Storybook, fixtures o tests.
+Corrige Tailwind:
+Cambia content a ./src/**/*.{js,jsx,ts,tsx}.
+Añade una prueba visual/E2E que compruebe la carga de estilos básicos.
+Corrige el primer flujo de uso:
+Login → dashboard vacío → alta de movimiento → listado y saldo actualizados.
+Criterio de salida: un usuario recién creado ve un estado vacío real, inicia sesión y consulta datos de PostgreSQL.
+
+Fase 2 — Integridad financiera y permisos
+Objetivo: impedir movimientos inválidos o modificaciones no autorizadas.
+Crea un servicio de dominio, por ejemplo transactionService.ts.
+createTransaction, updateTransaction, deleteTransaction.
+Debe usar una transacción Prisma para movimiento, beneficiarios, etiquetas y asientos de cuenta.
+Valida en backend, tanto al crear como al editar:
+La categoría pertenece al household y corresponde al TransactionType.
+Cuentas y beneficiarios pertenecen al household y son visibles para el usuario.
+Gasto/ingreso/ajuste requieren cuenta origen.
+Ahorro/transferencia requieren origen, destino y cuentas distintas.
+Repartos no vacíos y suma exacta de 100 %.
+Reglas de visibilidad para transferencias entre usuarios.
+Aplica autorización explícita:
+Lectura: reglas actuales de visibilidad.
+Edición/borrado: creador o admin, según la política documentada.
+No uses “puede ver” como sustituto de “puede modificar”.
+Corrige el formulario:
+Incluye pagador, visibilidad y beneficiarios.
+Para un movimiento privado, propone 100 % al creador.
+Para uno compartido, aplica el reparto configurado.
+Criterio de salida: no se puede crear ni actualizar una transacción que rompa invariantes, incluso llamando a la API directamente.
+
+Fase 3 — Completar el producto financiero básico
+Objetivo: eliminar pantallas y contratos simulados.
+Implementa CRUD real de cuentas:
+Crear, editar, archivar.
+Bloquear el borrado si existen asientos; usar archivado.
+Añadir validación de divisa EUR y propietario.
+Completa categorías:
+Crear, editar, archivar.
+Impedir archivar una categoría en uso sin una migración de categoría alternativa.
+Implementa presupuestos:
+Endpoints CRUD por mes y alcance (USER / SHARED).
+Cálculo server-side de gasto, restante y alertas.
+Conecta los controles de configuración que ahora son no-op.
+Corrige paginación y analítica:
+La web debe consumir items, page, pageSize, total.
+Implementa filtros reales en servidor.
+Añade endpoints de agregados mensuales/anuales; evita calcular gráficos solo con los primeros 20 movimientos.
+Criterio de salida: cuentas, presupuestos, preferencias y gráficos persisten tras recargar y reflejan todo el histórico.
+
+Fase 4 — Consolidar importación CSV
+Objetivo: que preview, commit e idempotencia sean auditables y coherentes.
+Persiste un snapshot de preview:
+Contenido o hash del archivo.
+Filas normalizadas, draft validado, fingerprint, decisión y errores.
+Fecha de expiración del preview.
+En el commit:
+Comprueba que cada fila pertenece al batch.
+Recalcula y compara sourceHash.
+No aceptes drafts arbitrarios enviados por el navegador.
+Ejecuta el lote con una estrategia explícita: atómico completo o resultado parcial documentado.
+Decide la política de duplicados:
+Recomendado: los duplicados exactos nunca se importan; elimina el botón “Incluir duplicadas”.
+Si se necesita una excepción, no reutilices los índices de idempotencia como si permitieran duplicados; registra una decisión explícita y una identidad alternativa auditada.
+Añade tests reales:
+Reimportar el mismo CSV.
+Duplicado por externalId.
+Duplicado por fingerprint.
+Candidato ±3 días.
+Commit manipulado desde un cliente.
+Criterio de salida: el sistema no duplica movimientos y no acepta un commit que no provenga de su preview.
+
+Fase 5 — Operación, backups y seguridad
+Objetivo: que desplegar, restaurar y monitorizar no pongan datos en riesgo.
+Reescribe restore/verify:
+Parsear DATABASE_URL correctamente con URL.
+Propagar la misma URL objetivo a dropdb, createdb, pg_restore, Prisma y healthcheck.
+Validar que el destino no sea producción antes de una restauración de prueba.
+Hacer que --target-db funcione realmente.
+Endurece backups:
+Un backup FAILED debe devolver código de proceso distinto de cero.
+Implementa de verdad latest y list, o elimina esas referencias de la documentación.
+El test restore debe ejecutar migraciones y una comprobación de conectividad sobre la base temporal.
+Separa entornos:
+docker-compose.yml solo para local.
+Añade configuración de producción sin contraseñas hardcodeadas.
+Añade .env.preview.example.
+En producción: COOKIE_SECURE=true, HTTPS y secretos gestionados externamente.
+IA y privacidad:
+No habilitar insights hasta implementar la política real de minimización/ZDR.
+Aplicar timeout, límite de coste, auditoría de fallos y consentimiento/configuración efectiva.
+No asumir que un header equivale a zero-data-retention.
+Criterio de salida: una restauración de ensayo no toca producción y un fallo de backup genera una alerta accionable.
+
+Fase 6 — Rendimiento, PWA y mantenimiento
+Objetivo: dejar una versión mantenible y preparada para crecer.
+Divide packages/shared:
+shared/core: tipos, Zod, dinero, fechas.
+shared/server: Prisma, Argon2, node:crypto, backups.
+shared/browser: utilidades compatibles con navegador.
+Evita exportar módulos Node desde la entrada que consume React.
+Mejora el bundle:
+Carga diferida de gráficos y pantallas pesadas.
+Actualiza Recharts, actualmente marcada como obsoleta.
+Establece presupuesto de tamaño de bundle en CI.
+Completa PWA:
+Iconos PNG adecuados.
+Estrategia de cache versionada.
+Página offline clara.
+Nunca cachear respuestas autenticadas de API.
+Limpieza:
+Ignora *.tsbuildinfo, vite.config.js y declaraciones generadas si no son fuente.
+Corrige documentación desactualizada: comandos de backup, arquitectura, IA y despliegue.
+Criterio de salida: build sin avisos relevantes, PWA fiable y documentación que describe exactamente el comportamiento real.
