@@ -131,13 +131,59 @@ async function upsertSetting(householdId: string, key: string, value: unknown) {
   })
 }
 
-// Health endpoint
+// Health endpoint - basic liveness check
 app.get(`${API_PREFIX}/health`, async () => {
   try {
     await prisma.$queryRaw`SELECT 1`
     return { ok: true, name: 'ToppFinance', version: API_VERSION_CONFIG.current, timestamp: new Date().toISOString() }
   } catch (error) {
     throw ApiError.database('Database connection failed')
+  }
+})
+
+// Health endpoint - detailed readiness check (for k8s/liveness probes)
+app.get(`${API_PREFIX}/health/ready`, async () => {
+  const checks: Record<string, { ok: boolean; latencyMs?: number; error?: string }> = {}
+  let allOk = true
+
+  // Database connectivity check
+  const dbStart = Date.now()
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    checks.database = { ok: true, latencyMs: Date.now() - dbStart }
+  } catch (error) {
+    checks.database = { ok: false, latencyMs: Date.now() - dbStart, error: error instanceof Error ? error.message : 'Unknown error' }
+    allOk = false
+  }
+
+  // Prisma client check (verify client is connected)
+  const prismaStart = Date.now()
+  try {
+    await prisma.$connect()
+    await prisma.$disconnect()
+    checks.prisma = { ok: true, latencyMs: Date.now() - prismaStart }
+  } catch (error) {
+    checks.prisma = { ok: false, latencyMs: Date.now() - prismaStart, error: error instanceof Error ? error.message : 'Unknown error' }
+    allOk = false
+  }
+
+  // Check if web dist exists (for production serving)
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const webDist = path.resolve(__dirname, '../../web/dist')
+  checks.webAssets = { ok: fs.existsSync(webDist) }
+
+  const statusCode = allOk ? 200 : 503
+  return {
+    ok: allOk,
+    name: 'ToppFinance',
+    version: API_VERSION_CONFIG.current,
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryUsage: process.memoryUsage(),
+    checks,
   }
 })
 

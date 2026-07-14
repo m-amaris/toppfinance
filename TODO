@@ -4,5 +4,5 @@ FASES DE DESARROLLO DEL PROYECTO
 ✔ 3. Datos - Endurecer el dominio financiero: Definir reglas únicas para importes, monedas, redondeos, fechas, categorías, reconciliación e idempotencia en importaciones CSV. @done(26-07-13)
 ✔ 4. API - Hacer explícita la capa backend: Estandarizar errores, validación de entrada/salida, versionado básico, DTOs y tests de integración para los endpoints críticos. @done(26-07-13)
 ✔ 5. Web - Ordenar el frontend: Dejar clara la estrategia de routing, estado global y acceso a datos; separar vistas, lógica de dominio y componentes presentacionales. @done(26-07-13)
-✔ 6. Calidad - Evitar regresiones: Subir mucho la cobertura de tests: utilidades monetarias, importadores CSV, Prisma, API, flujos críticos de UI.
-☐ 7. Operación - Preparar producción: Añadir preview, healthchecks, validación de backups restaurables, manejo de secretos y checklist de despliegue.
+✔ 6. Calidad - Evitar regresiones: Subir mucho la cobertura de tests: utilidades monetarias, importadores CSV, Prisma, API, flujos críticos de UI. @done(26-07-13)
+✔ 7. Operación - Preparar producción: Añadir preview, healthchecks, validación de backups restaurables, manejo de secretos y checklist de despliegue. @done(26-07-14)

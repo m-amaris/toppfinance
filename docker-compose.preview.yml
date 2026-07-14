@@ -1,0 +1,38 @@
+version: '3.8'
+
+# Preview deployment override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.preview.yml up --build -d
+
+services:
+  postgres:
+    # Reutiliza la misma BD pero con base de datos aislada por PR
+    environment:
+      POSTGRES_DB: ${PREVIEW_DB_NAME:-toppfinance_preview}
+      POSTGRES_USER: ${PREVIEW_DB_USER:-toppfinance}
+      POSTGRES_PASSWORD: ${PREVIEW_DB_PASSWORD:-toppfinance}
+    volumes:
+      - preview-postgres-data:/var/lib/postgresql/data
+
+  app:
+    build:
+      target: runner
+    env_file:
+      - .env.preview
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${PREVIEW_DB_USER:-toppfinance}:${PREVIEW_DB_PASSWORD:-toppfinance}@postgres:5432/${PREVIEW_DB_NAME:-toppfinance_preview}?schema=public
+      BACKUP_DIR: /app/backups/preview
+      COOKIE_SECURE: "true"
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-toppfinance_session_preview}
+    volumes:
+      - ./backups/preview:/app/backups/preview
+    ports:
+      - "${PREVIEW_PORT:-3001}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  preview-postgres-data:
+    driver: local
