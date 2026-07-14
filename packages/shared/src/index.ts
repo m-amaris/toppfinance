@@ -132,6 +132,7 @@ export type {
   SharedSplit,
   AiSettings,
   BackupPolicy,
+  SettingsResponse,
   CsvPreviewBody,
   CsvCommitBody,
   ImportBatchResponse,

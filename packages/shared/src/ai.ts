@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { TransactionType, DataCollection } from './enums.js';
 import type { OpenRouterMessage, CallOpenRouterInput, AiSettings } from './types.js';
+import { aiSettingsSchema } from './schemas.js';
 
 // Re-export types for convenience
 export type { OpenRouterMessage, CallOpenRouterInput, AiSettings };
@@ -176,7 +177,6 @@ export function validateAiSettings(
   input: Partial<AiSettings>,
   defaults: AiSettings
 ): AiSettings {
-  const { aiSettingsSchema } = require('./schemas.js');
   return aiSettingsSchema.parse({ ...defaults, ...input });
 }
 

@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import { BackupFrequency, DataCollection } from './enums.js';
+import { percentSchema } from './schemas.js';
 
 /**
  * Environment configuration schema.
@@ -24,6 +25,12 @@ export const envSchema = z.object({
   OPENROUTER_DEFAULT_MODEL: z.string().default('openai/gpt-5-mini'),
   OPENROUTER_FALLBACK_MODELS: z.string().default(''),
   OPENROUTER_ZDR: z.coerce.boolean().default(true),
+  // Rate limiting
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+  RATE_LIMIT_ALLOWLIST: z.string().optional(),
+  RATE_LIMIT_BAN_DURATION_MS: z.coerce.number().int().nonnegative().default(0),
+  RATE_LIMIT_CACHE_SIZE: z.coerce.number().int().positive().default(5000),
 });
 
 /**
@@ -68,19 +75,22 @@ export type PublicConfig = z.infer<typeof publicConfigSchema>;
  */
 export const adminSettingsSchema = z.object({
   sharedSplit: z.object({
-    miguelPercent: z.number().min(0).max(100),
-    saraPercent: z.number().min(0).max(100),
+    miguelPercent: percentSchema,
+    saraPercent: percentSchema,
+  }).refine(data => Math.abs(data.miguelPercent + data.saraPercent - 100) <= 0.01, {
+    message: 'El reparto global debe sumar 100%',
+    path: ['saraPercent'],
   }),
   aiSettings: z.object({
-    defaultModel: z.string(),
-    fallbackModels: z.array(z.string()),
+    defaultModel: z.string().trim().min(1),
+    fallbackModels: z.array(z.string().trim().min(1)).default([]),
     enforceZdr: z.boolean(),
     dataCollection: z.nativeEnum(DataCollection),
   }),
   backupPolicy: z.object({
-    frequency: z.nativeEnum(BackupFrequency),
-    retentionWeeks: z.number().int().min(1).max(260),
-    backupDir: z.string(),
+    frequency: z.nativeEnum(BackupFrequency).default(BackupFrequency.WEEKLY),
+    retentionWeeks: z.number().int().min(1).max(260).default(30),
+    backupDir: z.string().trim().min(1).default('./backups'),
   }),
 });
 

@@ -1,5 +1,6 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
 // `@toppfinance/shared` re-exports server-only modules (security.ts uses
 // `@node-rs/argon2`; csv.ts uses `node:crypto`). The web app never calls any
 // of those exports, so they are tree-shaken away — but rolldown still tries to
@@ -8,20 +9,21 @@ import react from '@vitejs/plugin-react';
 // environment. Marking the argon2 family external lets resolution succeed;
 // tree-shaking (the shared package sets `sideEffects: false`) then drops the
 // unused module so no external import remains in the browser bundle.
-var serverOnlyExternals = [/^@node-rs\/argon2/];
+const serverOnlyExternals = [/^@node-rs\/argon2/]
+
 export default defineConfig({
-    plugins: [react()],
-    server: {
-        proxy: {
-            '/api': {
-                target: 'http://localhost:3000',
-                changeOrigin: true,
-            },
-        },
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
     },
-    build: {
-        rollupOptions: {
-            external: serverOnlyExternals,
-        },
+  },
+  build: {
+    rollupOptions: {
+      external: serverOnlyExternals,
     },
-});
+  },
+})

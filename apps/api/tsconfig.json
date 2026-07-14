@@ -8,5 +8,6 @@
       "@toppfinance/shared": ["../../packages/shared/dist"]
     }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/testApp.ts", "tests/**/*"]
 }

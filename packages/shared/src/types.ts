@@ -107,6 +107,13 @@ export type TagResponse = z.infer<typeof schemas.tagSchema>;
 export type SharedSplit = z.infer<typeof schemas.sharedSplitSchema>;
 export type AiSettings = z.infer<typeof schemas.aiSettingsSchema>;
 export type BackupPolicy = z.infer<typeof schemas.backupPolicySchema>;
+export type SettingsResponse = {
+  locale: string;
+  currency: string;
+  sharedSplit: SharedSplit;
+  aiSettings: AiSettings;
+  backupPolicy: BackupPolicy;
+};
 
 /**
  * ===========================================

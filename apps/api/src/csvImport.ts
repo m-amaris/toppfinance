@@ -29,6 +29,8 @@ import type {
 import { requireAuth } from './auth.js'
 import { prisma } from './db.js'
 import { auditLog } from './logging.js'
+import { API_PREFIX, ApiError } from './apiErrors.js'
+import { success } from './apiResponse.js'
 
 // Re-export schemas from shared (they match exactly)
 export const csvPreviewBodySchema = sharedCsvPreviewBodySchema
@@ -209,7 +211,7 @@ async function getSharedSplitFromDb(householdId: string): Promise<{ miguelPercen
 }
 
 export async function registerCsvImportRoutes(app: FastifyInstance) {
-  app.post('/api/imports/csv/preview', { preHandler: requireAuth, bodyLimit: 5 * 1024 * 1024 }, async (request, reply) => {
+  app.post(`${API_PREFIX}/imports/csv/preview`, { preHandler: requireAuth, bodyLimit: 5 * 1024 * 1024 }, async (request, reply) => {
     const user = request.user!
     const body = sharedCsvPreviewBodySchema.parse(request.body)
 
@@ -273,14 +275,14 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
       metadata: { fileName: body.fileName, rowsCount: rows.length, warningsCount },
     })
 
-    return {
+    return success(reply, {
       importBatch,
       summary,
       rows,
-    }
+    })
   })
 
-  app.post('/api/imports/csv/:id/commit', { preHandler: requireAuth }, async (request, reply) => {
+  app.post(`${API_PREFIX}/imports/csv/:id/commit`, { preHandler: requireAuth }, async (request, reply) => {
     const user = request.user!
     const params = csvCommitParamsSchema.parse(request.params)
     const body = sharedCsvCommitBodySchema.parse(request.body)
@@ -288,7 +290,7 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
     const importBatch = await prisma.importBatch.findFirst({
       where: { id: params.id, householdId: user.householdId, status: 'PREVIEWED' },
     })
-    if (!importBatch) return reply.code(404).send({ error: 'Importacion no encontrada o ya confirmada' })
+    if (!importBatch) throw ApiError.notFound('Importación')
 
     // Resolve account id → name so the fingerprint is recomputed server-side from
     // the same canonical labels used during preview (server-authoritative idempotency key).
@@ -358,7 +360,7 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
       metadata: { created: createdIds.length, skippedDuplicates: skippedDuplicates.length, failed: failed.length },
     })
 
-    return {
+    return success(reply, {
       ok: failed.length === 0,
       summary: {
         created: createdIds.length,
@@ -368,6 +370,6 @@ export async function registerCsvImportRoutes(app: FastifyInstance) {
       createdIds,
       skippedDuplicates,
       failed,
-    }
+    })
   })
 }

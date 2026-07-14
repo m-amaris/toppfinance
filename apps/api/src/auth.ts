@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { config } from './config.js'
 import { prisma } from './db.js'
 import { hashIp, hashToken } from '@toppfinance/shared'
+import { ApiError } from './apiErrors.js'
 import type {
   AuthUser,
   LoginBody,
@@ -25,7 +26,7 @@ declare module 'fastify' {
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   const token = request.cookies[config.SESSION_COOKIE_NAME]
   if (!token) {
-    return reply.code(401).send({ error: 'UNAUTHENTICATED' })
+    return reply.code(401).send(ApiError.unauthorized().toResponse(request.url))
   }
 
   const session = await prisma.session.findUnique({
@@ -34,7 +35,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
   })
 
   if (!session || session.revokedAt || session.expiresAt <= new Date() || !session.user.active) {
-    return reply.code(401).send({ error: 'UNAUTHENTICATED' })
+    return reply.code(401).send(ApiError.unauthorized().toResponse(request.url))
   }
 
   request.user = {
@@ -58,7 +59,7 @@ export async function requireAdmin(request: FastifyRequest, reply: FastifyReply)
   await requireAuth(request, reply)
   if (reply.sent) return
   if (request.user?.role !== 'ADMIN') {
-    return reply.code(403).send({ error: 'FORBIDDEN' })
+    return reply.code(403).send(ApiError.forbidden().toResponse(request.url))
   }
 }
 

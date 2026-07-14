@@ -92,7 +92,7 @@ Si no necesitas datos iniciales, puedes omitir `npm run db:seed`.
 - `build`: `vite build`
 - `preview`: `vite preview --host 0.0.0.0 --port 4175`
 - `test`: `vitest run`
-- `check`: `vite build`
+- `check`: `tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit`
 
 ### packages/shared
 - `build`: `tsc -p tsconfig.json`

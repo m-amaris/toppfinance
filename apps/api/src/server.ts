@@ -39,42 +39,65 @@ import {
 } from '@toppfinance/shared'
 import { appLog, auditLog } from './logging.js'
 import { createSessionToken, hashIp, hashPassword, hashToken, LogLevel, LogCategory, verifyPassword } from '@toppfinance/shared'
+import { ApiError, toApiError, isApiError, ApiErrorCode, API_PREFIX } from './apiErrors.js'
+import { success, created, noContent, paginated, getPaginationParams } from './apiResponse.js'
+import { createVersionNegotiationHook, API_VERSION_CONFIG } from './apiVersion.js'
+import { registerOpenApi } from './openapi.js'
+import { registerRateLimit } from './rateLimit.js'
+import { registerRequestId } from './requestId.js'
+import { registerHelmet } from './helmet.js'
 
 const app = fastify({
   logger: {
-    // We can customize the logger here if needed, but for now we use the default
-    // We'll use the default pino logger
+    // Customize logger if needed
   },
 })
 
-// Custom error handler
+// 1. Security headers (first, so they apply to all responses)
+await app.register(registerHelmet)
+
+// 2. Request ID / correlation ID
+await app.register(registerRequestId)
+
+// 3. API version negotiation
+app.addHook('preHandler', createVersionNegotiationHook(API_VERSION_CONFIG))
+
+// 4. Rate limiting
+await app.register(registerRateLimit)
+
+// 5. OpenAPI / Swagger documentation
+await app.register(registerOpenApi)
+
+// 6. Custom error handler with standardized ApiError responses
 app.setErrorHandler((error, request, reply) => {
-  // Log the error
-  request.log.error(error)
-  // Send a generic error message in production, but in development we can send the error message
-  const isProduction = process.env.NODE_ENV === 'production'
-  let message = 'Internal Server Error'
-  if (error instanceof Error) {
-    message = error.message
-  }
-  const statusCode = (typeof error === 'object' && error !== null && 'statusCode' in error && typeof (error as Record<string, unknown>).statusCode === 'number'
-      ? (error as Record<string, unknown>).statusCode
-      : 500)
+  request.log.error({ err: error, reqId: request.id }, 'Request error')
 
-  // If the error is a validation error from zod, we want to send 400
+  // Handle Zod validation errors
   if (error instanceof z.ZodError) {
-    return reply.status(400).send({
-      error: 'Validation Error',
-      details: error.errors.map(e => ({
-        path: e.path,
-        message: e.message,
-      })),
-    })
+    const apiError = ApiError.validation('Error de validación', error.errors.map(e => ({
+      path: e.path,
+      message: e.message,
+    })))
+    return reply.status(apiError.statusCode).send(apiError.toResponse(request.url))
   }
 
-  return reply.status(statusCode as number).send({ error: message })
+  // Handle Prisma unique constraint errors
+  if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+    const apiError = ApiError.alreadyExists('Recurso')
+    return reply.status(apiError.statusCode).send(apiError.toResponse(request.url))
+  }
+
+  // Handle our custom ApiError
+  if (isApiError(error)) {
+    return reply.status(error.statusCode).send(error.toResponse(request.url))
+  }
+
+  // Generic error
+  const apiError = toApiError(error)
+  return reply.status(apiError.statusCode).send(apiError.toResponse(request.url))
 })
 
+// 7. Register plugins
 await app.register(cookie)
 await app.register(cors, {
   credentials: true,
@@ -84,13 +107,12 @@ await app.register(cors, {
   },
 })
 
-function publicUser(user: NonNullable<typeof app extends never ? never : unknown>) {
-  const typed = user as { id: string; email: string; displayName: string; role: string }
+function publicUser(user: { id: string; email: string; displayName: string; role: string }) {
   return {
-    id: typed.id,
-    email: typed.email,
-    displayName: typed.displayName,
-    role: typed.role,
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    role: user.role,
   }
 }
 
@@ -98,7 +120,7 @@ async function getSetting<T>(householdId: string, key: string, fallback: T): Pro
   const setting = await prisma.adminSetting.findUnique({
     where: { householdId_key: { householdId, key } },
   })
-  return setting ? setting.value as T : fallback
+  return setting ? (setting.value as T) : fallback
 }
 
 async function upsertSetting(householdId: string, key: string, value: unknown) {
@@ -109,17 +131,18 @@ async function upsertSetting(householdId: string, key: string, value: unknown) {
   })
 }
 
-app.get('/api/health', async () => {
+// Health endpoint
+app.get(`${API_PREFIX}/health`, async () => {
   try {
-    // Check database connection
-    await prisma.$queryRaw`SELECT 1`;
-    return { ok: true, name: 'ToppFinance', timestamp: new Date().toISOString() };
+    await prisma.$queryRaw`SELECT 1`
+    return { ok: true, name: 'ToppFinance', version: API_VERSION_CONFIG.current, timestamp: new Date().toISOString() }
   } catch (error) {
-    throw new Error('Database connection failed');
+    throw ApiError.database('Database connection failed')
   }
 })
 
-app.post('/api/auth/login', async (request, reply) => {
+// Auth routes
+app.post(`${API_PREFIX}/auth/login`, async (request, reply) => {
   const body = loginBodySchema.parse(request.body)
 
   const user = await prisma.user.findUnique({
@@ -129,7 +152,7 @@ app.post('/api/auth/login', async (request, reply) => {
 
   if (!user || !user.active || !(await verifyPassword(user.passwordHash, body.password))) {
     await appLog({ level: LogLevel.WARN, category: LogCategory.SECURITY, message: 'Login fallido', metadata: { email: body.email } })
-    return reply.code(401).send({ error: 'Credenciales invalidas' })
+    throw ApiError.invalidCredentials()
   }
 
   const token = createSessionToken()
@@ -146,13 +169,13 @@ app.post('/api/auth/login', async (request, reply) => {
   setSessionCookie(reply, token, expiresAt)
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'session', action: 'login' })
 
-  return {
+  return created(reply, {
     user: publicUser(user),
     household: { id: user.household.id, name: user.household.name },
-  }
+  })
 })
 
-app.post('/api/auth/logout', async (request, reply) => {
+app.post(`${API_PREFIX}/auth/logout`, async (request, reply) => {
   const token = request.cookies[config.SESSION_COOKIE_NAME]
   if (token) {
     await prisma.session.updateMany({
@@ -161,19 +184,20 @@ app.post('/api/auth/logout', async (request, reply) => {
     })
   }
   clearSessionCookie(reply)
-  return { ok: true }
+  return success(reply, { ok: true })
 })
 
-app.get('/api/auth/me', { preHandler: requireAuth }, async request => {
+app.get(`${API_PREFIX}/auth/me`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const household = await prisma.household.findUniqueOrThrow({ where: { id: user.householdId } })
-  return {
+  return success(reply, {
     user,
     household: { id: household.id, name: household.name },
-  }
+  })
 })
 
-app.get('/api/accounts', { preHandler: requireAuth }, async request => {
+// Accounts routes
+app.get(`${API_PREFIX}/accounts`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const accounts = await prisma.account.findMany({
     where: accountVisibilityWhere(user.id, user.householdId),
@@ -181,7 +205,7 @@ app.get('/api/accounts', { preHandler: requireAuth }, async request => {
     orderBy: [{ visibility: 'asc' }, { name: 'asc' }],
   })
 
-  return {
+  return success(reply, {
     accounts: await Promise.all(accounts.map(async account => ({
       id: account.id,
       name: account.name,
@@ -194,67 +218,70 @@ app.get('/api/accounts', { preHandler: requireAuth }, async request => {
       currency: account.currency,
       archived: account.archived,
     }))),
-  }
+  })
 })
 
-app.get('/api/categories', { preHandler: requireAuth }, async request => {
+// Categories routes
+app.get(`${API_PREFIX}/categories`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const categories = await prisma.category.findMany({
     where: { householdId: user.householdId, archived: false },
     orderBy: [{ type: 'asc' }, { name: 'asc' }],
   })
-  return { categories }
+  return success(reply, { categories })
 })
 
-app.patch('/api/categories/:id', { preHandler: requireAuth }, async (request, reply) => {
+app.patch(`${API_PREFIX}/categories/:id`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const params = entityIdParamsSchema.parse(request.params)
   const body = updateCategorySchema.parse(request.body)
 
   const category = await prisma.category.findFirst({ where: { id: params.id, householdId: user.householdId } })
-  if (!category) return reply.code(404).send({ error: 'Categoria no encontrada' })
+  if (!category) throw ApiError.notFound('Categoría')
 
   const updated = await prisma.category.update({ where: { id: params.id }, data: body })
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'category', entityId: updated.id, action: 'update', metadata: body })
-  return { category: updated }
+  return success(reply, { category: updated })
 })
 
-app.get('/api/settings', { preHandler: requireAuth }, async request => {
+// Settings routes
+app.get(`${API_PREFIX}/settings`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const [sharedSplit, aiSettings, backupPolicy] = await Promise.all([
     getSetting(user.householdId, 'sharedSplit', { miguelPercent: 50, saraPercent: 50 }),
     getSetting(user.householdId, 'aiSettings', defaultAiSettings()),
     getSetting(user.householdId, 'backupPolicy', { frequency: 'weekly', retentionWeeks: 30, backupDir: config.BACKUP_DIR }),
   ])
-  return { locale: 'es-ES', currency: 'EUR', sharedSplit, aiSettings, backupPolicy }
+  return success(reply, { locale: 'es-ES', currency: 'EUR', sharedSplit, aiSettings, backupPolicy })
 })
 
-app.patch('/api/admin/settings/shared-split', { preHandler: requireAdmin }, async (request, reply) => {
+app.patch(`${API_PREFIX}/admin/settings/shared-split`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const body = sharedSplitSchema.parse(request.body)
 
   await upsertSetting(user.householdId, 'sharedSplit', body)
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'adminSetting', action: 'updateSharedSplit', metadata: body })
-  return { sharedSplit: body }
+  return success(reply, { sharedSplit: body })
 })
 
-app.patch('/api/admin/settings/ai', { preHandler: requireAdmin }, async request => {
+app.patch(`${API_PREFIX}/admin/settings/ai`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const body = aiSettingsSchema.parse(request.body)
   await upsertSetting(user.householdId, 'aiSettings', body)
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'adminSetting', action: 'updateAiSettings' })
-  return { aiSettings: body }
+  return success(reply, { aiSettings: body })
 })
 
-app.patch('/api/admin/settings/backup-policy', { preHandler: requireAdmin }, async request => {
+app.patch(`${API_PREFIX}/admin/settings/backup-policy`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const body = backupPolicySchema.parse(request.body)
   await upsertSetting(user.householdId, 'backupPolicy', body)
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'adminSetting', action: 'updateBackupPolicy', metadata: body })
-  return { backupPolicy: body }
+  return success(reply, { backupPolicy: body })
 })
 
-app.get('/api/transactions', { preHandler: requireAuth }, async request => {
+// Transactions routes
+app.get(`${API_PREFIX}/transactions`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const filters = transactionFiltersSchema.parse(request.query)
   const where = transactionVisibilityWhere(user.id, user.householdId)
@@ -282,37 +309,42 @@ app.get('/api/transactions', { preHandler: requireAuth }, async request => {
     where.tags = { some: { tag: { name: filters.tag } } }
   }
 
-  const transactions = await prisma.transaction.findMany({
-    where,
-    include: {
-      category: true,
-      merchant: true,
-      sourceAccount: true,
-      destinationAccount: true,
-      paidByUser: true,
-      beneficiaries: { include: { user: true } },
-      tags: { include: { tag: true } },
-    },
-    orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
-    take: 500,
-  })
+  const { page, pageSize, skip, take } = getPaginationParams(request.query as Record<string, string | string[] | undefined>)
 
-  return {
-    transactions: transactions.map(tx => ({
-      ...tx,
-      amount: Number(tx.amount),
-      beneficiaries: tx.beneficiaries.map(split => ({
-        userId: split.userId,
-        displayName: split.user.displayName,
-        percent: Number(split.percent),
-        amount: split.amount == null ? null : Number(split.amount),
-      })),
-      tags: tx.tags.map(item => item.tag.name),
+  const [transactions, total] = await Promise.all([
+    prisma.transaction.findMany({
+      where,
+      include: {
+        category: true,
+        merchant: true,
+        sourceAccount: true,
+        destinationAccount: true,
+        paidByUser: true,
+        beneficiaries: { include: { user: true } },
+        tags: { include: { tag: true } },
+      },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      skip,
+      take,
+    }),
+    prisma.transaction.count({ where }),
+  ])
+
+  return paginated(reply, transactions.map(tx => ({
+    ...tx,
+    amount: Number(tx.amount),
+    beneficiaries: tx.beneficiaries.map(split => ({
+      userId: split.userId,
+      displayName: split.user.displayName,
+      percent: Number(split.percent),
+      amount: split.amount == null ? null : Number(split.amount),
     })),
-  }
+    tags: tx.tags.map(item => item.tag.name),
+  })), total, page, pageSize)
 })
 
-app.get('/api/exports/history.csv', { preHandler: requireAuth }, async (request, reply) => {
+// Export routes
+app.get(`${API_PREFIX}/exports/history.csv`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const transactions = await prisma.transaction.findMany({
     where: transactionVisibilityWhere(user.id, user.householdId),
@@ -351,7 +383,7 @@ app.get('/api/exports/history.csv', { preHandler: requireAuth }, async (request,
   return transactionsToCsv(csvRows)
 })
 
-app.get('/api/exports/history.json', { preHandler: requireAuth }, async request => {
+app.get(`${API_PREFIX}/exports/history.json`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const transactions = await prisma.transaction.findMany({
     where: transactionVisibilityWhere(user.id, user.householdId),
@@ -368,7 +400,7 @@ app.get('/api/exports/history.json', { preHandler: requireAuth }, async request 
   })
 
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'export', action: 'historyJson' })
-  return {
+  return success(reply, {
     exportedAt: new Date().toISOString(),
     transactions: transactions.map(tx => ({
       ...tx,
@@ -379,12 +411,14 @@ app.get('/api/exports/history.json', { preHandler: requireAuth }, async request 
       })),
       tags: tx.tags.map(item => item.tag.name),
     })),
-  }
+  })
 })
 
+// CSV Import routes
 await registerCsvImportRoutes(app)
 
-app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply) => {
+// Transaction CRUD
+app.post(`${API_PREFIX}/transactions`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const body = createTransactionSchema.parse(request.body)
   assertSplitTotal(body.beneficiarySplits)
@@ -392,22 +426,20 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
   const category = await prisma.category.findFirst({
     where: { id: body.categoryId, householdId: user.householdId, archived: false },
   })
-  if (!category) return reply.code(400).send({ error: 'Categoria invalida' })
+  if (!category) throw ApiError.invalidCategory()
 
   const accountIds = [body.sourceAccountId, body.destinationAccountId].filter(Boolean) as string[]
   if (accountIds.length) {
     const count = await prisma.account.count({
       where: { id: { in: accountIds }, ...accountVisibilityWhere(user.id, user.householdId) },
     })
-    if (count !== accountIds.length) return reply.code(400).send({ error: 'Cuenta invalida o sin permisos' })
+    if (count !== accountIds.length) throw ApiError.invalidAccount()
   }
 
   const beneficiaryUsers = await prisma.user.findMany({
     where: { householdId: user.householdId, id: { in: body.beneficiarySplits.map(split => split.userId) }, active: true },
   })
-  if (beneficiaryUsers.length !== body.beneficiarySplits.length) {
-    return reply.code(400).send({ error: 'Beneficiario invalido' })
-  }
+  if (beneficiaryUsers.length !== body.beneficiarySplits.length) throw ApiError.invalidBeneficiary()
 
   const merchant = body.merchantName
     ? await prisma.merchant.upsert({
@@ -442,6 +474,10 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
         paidByUserId: body.paidByUserId ?? null,
         createdByUserId: user.id,
         notes: body.notes ?? null,
+        importBatchId: null,
+        externalId: body.externalId ?? null,
+        fingerprint: null,
+        sourceHash: null,
         beneficiaries: {
           create: body.beneficiarySplits.map(split => ({
             userId: split.userId,
@@ -449,6 +485,7 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
           })),
         },
       },
+      include: { beneficiaries: { include: { user: true } }, tags: { include: { tag: true } } },
     })
 
     const entries = buildAccountEntries({
@@ -458,8 +495,9 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
       sourceAccountId: created.sourceAccountId,
       destinationAccountId: created.destinationAccountId,
     })
+    if (entries.length) await tx.accountEntry.createMany({ data: entries })
 
-    for (const tagName of body.tags) {
+    for (const tagName of [...new Set(body.tags)]) {
       const tag = await tx.tag.upsert({
         where: { householdId_name: { householdId: user.householdId, name: tagName } },
         create: { householdId: user.householdId, name: tagName },
@@ -472,10 +510,10 @@ app.post('/api/transactions', { preHandler: requireAuth }, async (request, reply
   })
 
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'transaction', entityId: result.id, action: 'create' })
-  return reply.code(201).send({ transaction: { ...result, amount: Number(result.amount) } })
+  return created(reply, { transaction: { ...result, amount: Number(result.amount) } })
 })
 
-app.patch('/api/transactions/:id', { preHandler: requireAuth }, async (request, reply) => {
+app.patch(`${API_PREFIX}/transactions/:id`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const params = entityIdParamsSchema.parse(request.params)
   const body = updateTransactionSchema.parse(request.body)
@@ -485,7 +523,7 @@ app.patch('/api/transactions/:id', { preHandler: requireAuth }, async (request, 
     where: { id: params.id, ...transactionVisibilityWhere(user.id, user.householdId) },
     include: { beneficiaries: true },
   })
-  if (!existing) return reply.code(404).send({ error: 'Movimiento no encontrado' })
+  if (!existing) throw ApiError.notFound('Movimiento')
 
   const updated = await prisma.$transaction(async tx => {
     const next = await tx.transaction.update({
@@ -529,23 +567,24 @@ app.patch('/api/transactions/:id', { preHandler: requireAuth }, async (request, 
   })
 
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'transaction', entityId: updated.id, action: 'update' })
-  return { transaction: { ...updated, amount: Number(updated.amount) } }
+  return success(reply, { transaction: { ...updated, amount: Number(updated.amount) } })
 })
 
-app.delete('/api/transactions/:id', { preHandler: requireAuth }, async (request, reply) => {
+app.delete(`${API_PREFIX}/transactions/:id`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const params = entityIdParamsSchema.parse(request.params)
   const existing = await prisma.transaction.findFirst({
     where: { id: params.id, ...transactionVisibilityWhere(user.id, user.householdId) },
   })
-  if (!existing) return reply.code(404).send({ error: 'Movimiento no encontrado' })
+  if (!existing) throw ApiError.notFound('Movimiento')
 
   await prisma.transaction.delete({ where: { id: params.id } })
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'transaction', entityId: params.id, action: 'delete' })
-  return { ok: true }
+  return success(reply, { ok: true })
 })
 
-app.post('/api/ai/insights', { preHandler: requireAuth }, async request => {
+// AI Insights
+app.post(`${API_PREFIX}/ai/insights`, { preHandler: requireAuth }, async (request, reply) => {
   const user = request.user!
   const body = aiInsightsBodySchema.parse(request.body ?? {})
   const settings = await getSetting(user.householdId, 'aiSettings', defaultAiSettings())
@@ -587,10 +626,11 @@ app.post('/api/ai/insights', { preHandler: requireAuth }, async request => {
     },
   })
 
-  return { insight: response.content, modelUsed: response.modelUsed }
+  return success(reply, { insight: response.content, modelUsed: response.modelUsed })
 })
 
-app.get('/api/admin/logs', { preHandler: requireAdmin }, async request => {
+// Admin routes
+app.get(`${API_PREFIX}/admin/logs`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const query = request.query as Record<string, string | undefined>
   const level = query.level as 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | undefined
@@ -605,51 +645,51 @@ app.get('/api/admin/logs', { preHandler: requireAdmin }, async request => {
     orderBy: { createdAt: 'desc' },
     take: 300,
   })
-  return { logs }
+  return success(reply, { logs })
 })
 
-app.get('/api/admin/audit-logs', { preHandler: requireAdmin }, async request => {
+app.get(`${API_PREFIX}/admin/audit-logs`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const logs = await prisma.auditLog.findMany({
     where: { householdId: user.householdId },
     orderBy: { createdAt: 'desc' },
     take: 300,
   })
-  return { logs }
+  return success(reply, { logs })
 })
 
-app.get('/api/admin/backups', { preHandler: requireAdmin }, async request => {
+app.get(`${API_PREFIX}/admin/backups`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const backups = await prisma.backupRun.findMany({
     where: { OR: [{ householdId: user.householdId }, { householdId: null }] },
     orderBy: { startedAt: 'desc' },
     take: 100,
   })
-  return { backups: backups.map(backup => ({ ...backup, sizeBytes: backup.sizeBytes?.toString() ?? null })) }
+  return success(reply, { backups: backups.map(backup => ({ ...backup, sizeBytes: backup.sizeBytes?.toString() ?? null })) })
 })
 
-app.post('/api/admin/backups/run', { preHandler: requireAdmin }, async request => {
+app.post(`${API_PREFIX}/admin/backups/run`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const backup = await runBackup(user.householdId)
   await auditLog({ householdId: user.householdId, actorUserId: user.id, entity: 'backup', entityId: backup.id, action: 'run', metadata: { status: backup.status } })
-  return { backup: { ...backup, sizeBytes: backup.sizeBytes?.toString() ?? null } }
+  return success(reply, { backup: { ...backup, sizeBytes: backup.sizeBytes?.toString() ?? null } })
 })
 
-app.get('/api/admin/users', { preHandler: requireAdmin }, async request => {
+app.get(`${API_PREFIX}/admin/users`, { preHandler: requireAdmin }, async (request, reply) => {
   const user = request.user!
   const users = await prisma.user.findMany({
     where: { householdId: user.householdId },
     orderBy: { displayName: 'asc' },
   })
-  return { users: users.map(publicUser) }
+  return success(reply, { users: users.map(publicUser) })
 })
 
-app.patch('/api/admin/users/:id/password', { preHandler: requireAdmin }, async (request, reply) => {
+app.patch(`${API_PREFIX}/admin/users/:id/password`, { preHandler: requireAdmin }, async (request, reply) => {
   const actor = request.user!
   const params = entityIdParamsSchema.parse(request.params)
   const body = adminChangePasswordBodySchema.parse(request.body)
   const target = await prisma.user.findFirst({ where: { id: params.id, householdId: actor.householdId } })
-  if (!target) return reply.code(404).send({ error: 'Usuario no encontrado' })
+  if (!target) throw ApiError.notFound('Usuario')
 
   await prisma.user.update({
     where: { id: target.id },
@@ -657,9 +697,10 @@ app.patch('/api/admin/users/:id/password', { preHandler: requireAdmin }, async (
   })
   await prisma.session.updateMany({ where: { userId: target.id }, data: { revokedAt: new Date() } })
   await auditLog({ householdId: actor.householdId, actorUserId: actor.id, entity: 'user', entityId: target.id, action: 'passwordChange' })
-  return { ok: true }
+  return success(reply, { ok: true })
 })
 
+// Serve static files from web build (production)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const webDist = path.resolve(__dirname, '../../web/dist')
 const hasWebDist = existsSync(webDist)
@@ -672,8 +713,8 @@ if (hasWebDist) {
 }
 
 app.setNotFoundHandler(async (request, reply) => {
-  if (request.url.startsWith('/api/')) {
-    return reply.code(404).send({ error: 'Not found' })
+  if (request.url.startsWith(`${API_PREFIX}/`)) {
+    throw ApiError.notFound('Endpoint')
   }
   if (hasWebDist) return reply.sendFile('index.html')
   return reply.code(404).send({ error: 'Frontend no compilado todavia' })
