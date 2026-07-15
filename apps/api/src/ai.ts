@@ -4,11 +4,14 @@
  * API-specific AI logic should go here (e.g. database lookups before calling AI).
  */
 
-export {
+export type {
   AiSettings,
   CallOpenRouterInput,
   OpenRouterMessage,
   OpenRouterResponse,
+} from '@toppfinance/shared'
+
+export {
   defaultAiSettings,
   callOpenRouter,
   anonymizeTransactions,

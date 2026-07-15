@@ -57,7 +57,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AppRoutes() {
-  const { isAuthenticated, login } = useAuth()
+  const { login } = useAuth()
   const { darkMode, toggleDark, setActiveTab } = useUIState()
 
   const onNavigate = (tab: string) => {
@@ -68,7 +68,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={
         <PublicRoute>
-          <LoginScreen onLogin={login} darkMode={darkMode} toggleDark={toggleDark} syncing={!isAuthenticated} />
+          <LoginScreen onLogin={login} darkMode={darkMode} toggleDark={toggleDark} syncing={false} />
         </PublicRoute>
       } />
       <Route element={
