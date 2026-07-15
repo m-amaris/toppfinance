@@ -5,6 +5,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills'
 const serverOnlyExternals = [/^@node-rs\/argon2/]
 
 export default defineConfig({
+  base: './',
   plugins: [
     react(),
     nodePolyfills({
