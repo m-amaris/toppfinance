@@ -15,9 +15,10 @@ import {
   type LocalTransactionType,
   Visibility,
 } from '@toppfinance/shared'
-import { transaccionesIniciales, cuentasIniciales, presupuestosIniciales, configuracionInicial, CATEGORIAS_EDITABLES_INICIALES, patrimonioMensual as patrimonioMensualInicial } from '../data/store.ts'
+import { presupuestosIniciales, configuracionInicial } from '../data/store.ts'
 import { useAccounts, useCategories, useSettings, useTransactions } from './useQueries.ts'
 import { useCreateTransaction, useUpdateTransaction, useDeleteTransaction, useUpdateCategory, useCsvPreview, useCsvCommit } from './useQueries.ts'
+import { useAuth } from '../contexts/AuthContext.tsx'
 
 /** Category type helpers */
 const gastoIdsBase = ['vivienda', 'servicios', 'alimentacion', 'transporte', 'salud', 'deporte', 'ocio', 'compras', 'educacion', 'ropa', 'viajes', 'regalos', 'otros']
@@ -228,16 +229,17 @@ export interface FinanzasDomainContextValue {
 const FinanzasDomainContext = createContext<FinanzasDomainContextValue | null>(null)
 
 export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
-  const { data: accountsData, isLoading: accountsLoading } = useAccounts()
-  const { data: categoriesData, isLoading: categoriesLoading } = useCategories()
-  const { data: settingsData, isLoading: settingsLoading } = useSettings()
-  const { data: transactionsData, isLoading: transactionsLoading, refetch: refetchTransactions } = useTransactions()
+  const { isAuthenticated, user } = useAuth()
+  const { data: accountsData, isLoading: accountsLoading } = useAccounts(isAuthenticated)
+  const { data: categoriesData, isLoading: categoriesLoading } = useCategories(isAuthenticated)
+  const { data: settingsData, isLoading: settingsLoading } = useSettings(isAuthenticated)
+  const { data: transactionsData, isLoading: transactionsLoading, refetch: refetchTransactions } = useTransactions({}, isAuthenticated)
 
   const isLoading = accountsLoading || categoriesLoading || settingsLoading || transactionsLoading
 
   // Map API data to local format
   const cuentas = useMemo(() => {
-    if (!accountsData?.accounts) return cuentasIniciales
+    if (!accountsData?.accounts) return []
     return accountsData.accounts.map((acc, idx) => {
       const style = acc.type === 'SHARED' ? { icono: 'Wallet', color: '#01696f', tipo: 'compartida' as const }
         : acc.type === 'SAVINGS' ? { icono: 'PiggyBank', color: '#437a22', tipo: 'ahorro' as const }
@@ -258,12 +260,12 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
   }, [accountsData])
 
   const categorias = useMemo(() => {
-    if (!categoriesData?.categories?.length) return CATEGORIAS_EDITABLES_INICIALES
+    if (!categoriesData?.categories) return []
     return categoriesData.categories.map(mapApiCategory)
   }, [categoriesData])
 
   const transacciones = useMemo(() => {
-    if (!transactionsData?.transactions?.length) return transaccionesIniciales
+    if (!transactionsData?.transactions) return []
     return transactionsData.transactions.map(tx => {
       const tipo = (TRANSACTION_TYPE_LOCAL_KEY[tx.type] || 'gasto') as LocalTransactionType
       const amount = Number(tx.amount || 0)
@@ -314,7 +316,6 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
   )
 
   const patrimonioMensual = useMemo(() => {
-    if (!transacciones.length) return patrimonioMensualInicial
     return computePatrimonioMensual(transacciones, cuentas, categorias, dynamicGastoIds)
   }, [transacciones, cuentas, categorias, dynamicGastoIds])
 
@@ -376,6 +377,11 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
   // Mutation wrappers that call API + refresh
   const agregarTransaccion = useCallback(async (tx: Partial<SharedTransaction>) => {
     const tipo = tx.tipo || (tx.importe && tx.importe > 0 ? 'ingreso' : 'gasto')
+    const beneficiarySplits = tx.beneficiarySplits?.length
+      ? tx.beneficiarySplits
+      : user
+        ? [{ userId: user.id, percent: 100 }]
+        : []
     const payload = {
       type: LOCAL_KEY_TO_TRANSACTION_TYPE[tipo] || 'EXPENSE',
       date: tx.fecha ?? new Date().toISOString().slice(0, 10),
@@ -385,15 +391,15 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
       sourceAccountId: String(tx.cuentaId ?? configuracion.cuentaPrincipalId ?? cuentas[0]?.id ?? ''),
       destinationAccountId: (tipo === 'ahorro' || tipo === 'transferencia') ? String(tx.cuentaDestinoId ?? configuracion.cuentaAhorroId ?? configuracion.cuentaTransferenciaDestinoId ?? '') : null,
       visibility: (tx.visibility as Visibility) || Visibility.SHARED,
-      paidByUserId: tx.paidByUserId ?? null,
-      beneficiarySplits: tx.beneficiarySplits ?? [],
+      paidByUserId: tx.paidByUserId ?? user?.id ?? null,
+      beneficiarySplits,
       merchantName: tx.merchantName ?? null,
       tags: tx.tags ?? [],
       notes: tx.notes ?? null,
     }
     await createTxMutation.mutateAsync(payload)
     await refetchTransactions()
-  }, [createTxMutation, refetchTransactions, configuracion, cuentas])
+  }, [createTxMutation, refetchTransactions, configuracion, cuentas, user])
 
   const actualizarTransaccion = useCallback(async (id: string, patch: Partial<SharedTransaction>) => {
     const apiPatch: Record<string, unknown> = {}

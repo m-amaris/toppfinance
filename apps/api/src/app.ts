@@ -803,7 +803,7 @@ if (hasWebDist) {
 }
 
 app.setNotFoundHandler(async (request, reply) => {
-  if (request.url.startsWith(`${API_PREFIX}/`)) {
+  if (request.url.startsWith('/api/')) {
     throw ApiError.notFound('Endpoint')
   }
   if (hasWebDist) return reply.sendFile('index.html')

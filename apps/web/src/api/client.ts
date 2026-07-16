@@ -25,9 +25,15 @@ interface ApiError extends Error {
   payload?: unknown
 }
 
+interface ApiEnvelope<T> {
+  data: T
+}
+
+const API_BASE_PATH = '/api/v1'
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const hasBody = options.body !== undefined
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE_PATH}${path}`, {
     method: options.method || 'GET',
     credentials: 'include',
     headers: {
@@ -52,7 +58,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw error
   }
 
-  return payload as T
+  if (!contentType.includes('application/json') || typeof payload !== 'object' || payload === null || !('data' in payload)) {
+    throw new Error(`Respuesta inválida de la API (${response.status}): se esperaba JSON con el campo data`)
+  }
+
+  return (payload as ApiEnvelope<T>).data
 }
 
 /** Auth */
@@ -67,9 +77,9 @@ interface LoginResponse {
 }
 
 export const authApi = {
-  me: () => request<AuthMeResponse>('/api/auth/me'),
-  login: (email: string, password: string) => request<LoginResponse>('/api/auth/login', { method: 'POST', body: { email, password } }),
-  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  me: () => request<AuthMeResponse>('/auth/me'),
+  login: (email: string, password: string) => request<LoginResponse>('/auth/login', { method: 'POST', body: { email, password } }),
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
 }
 
 /** Accounts */
@@ -78,7 +88,7 @@ interface AccountsListResponse {
 }
 
 export const accountsApi = {
-  list: () => request<AccountsListResponse>('/api/accounts'),
+  list: () => request<AccountsListResponse>('/accounts'),
 }
 
 /** Categories */
@@ -87,13 +97,16 @@ interface CategoriesListResponse {
 }
 
 export const categoriesApi = {
-  list: () => request<CategoriesListResponse>('/api/categories'),
-  update: (id: string, body: UpdateCategoryInput) => request<CategoryResponse>(`/api/categories/${id}`, { method: 'PATCH', body }),
+  list: () => request<CategoriesListResponse>('/categories'),
+  update: async (id: string, body: UpdateCategoryInput) => {
+    const { category } = await request<{ category: CategoryResponse }>(`/categories/${id}`, { method: 'PATCH', body })
+    return category
+  },
 }
 
 /** Settings */
 export const settingsApi = {
-  get: () => request<SettingsResponse>('/api/settings'),
+  get: () => request<SettingsResponse>('/settings'),
 }
 
 /** Transactions */
@@ -106,21 +119,28 @@ interface TransactionFilters {
   offset?: number
 }
 
-interface TransactionsListResponse {
-  transactions: TransactionResponse[]
+interface TransactionsPageResponse {
+  items: TransactionResponse[]
 }
 
 export const transactionsApi = {
-  list: (filters: TransactionFilters = {}) => {
+  list: async (filters: TransactionFilters = {}) => {
     const params = new URLSearchParams(
       Object.entries(filters).filter(([, value]) => value != null && value !== '')
     )
     const suffix = params.toString() ? `?${params}` : ''
-    return request<TransactionsListResponse>(`/api/transactions${suffix}`)
+    const page = await request<TransactionsPageResponse>(`/transactions${suffix}`)
+    return { transactions: page.items }
   },
-  create: (body: CreateTransactionInput) => request<TransactionResponse>('/api/transactions', { method: 'POST', body }),
-  update: (id: string, body: UpdateTransactionInput) => request<TransactionResponse>(`/api/transactions/${id}`, { method: 'PATCH', body }),
-  delete: (id: string) => request<{ ok: boolean }>(`/api/transactions/${id}`, { method: 'DELETE' }),
+  create: async (body: CreateTransactionInput) => {
+    const { transaction } = await request<{ transaction: TransactionResponse }>('/transactions', { method: 'POST', body })
+    return transaction
+  },
+  update: async (id: string, body: UpdateTransactionInput) => {
+    const { transaction } = await request<{ transaction: TransactionResponse }>(`/transactions/${id}`, { method: 'PATCH', body })
+    return transaction
+  },
+  delete: (id: string) => request<{ ok: boolean }>(`/transactions/${id}`, { method: 'DELETE' }),
 }
 
 /** CSV Import */
@@ -147,8 +167,8 @@ interface CsvCommitResponse {
 }
 
 export const csvApi = {
-  preview: (body: CsvPreviewBody) => request<CsvPreviewResponse>('/api/imports/csv/preview', { method: 'POST', body }),
-  commit: (id: string, body: CsvCommitBody) => request<CsvCommitResponse>(`/api/imports/csv/${id}/commit`, { method: 'POST', body }),
+  preview: (body: CsvPreviewBody) => request<CsvPreviewResponse>('/imports/csv/preview', { method: 'POST', body }),
+  commit: (id: string, body: CsvCommitBody) => request<CsvCommitResponse>(`/imports/csv/${id}/commit`, { method: 'POST', body }),
 }
 
 /** Legacy combined export for backward compatibility during migration */

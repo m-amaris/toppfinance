@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { FinanzasDomainProvider, useFinanzas } from '../hooks/FinanzasDomainContext.tsx'
+import { AuthProvider } from '../contexts/AuthContext.tsx'
 import { UIStateProvider } from '../contexts/UIStateContext.tsx'
 import { QueryClientProvider, queryClient } from '../test-setup.tsx'
 import { setupServer } from 'msw/node'
@@ -11,11 +12,13 @@ const server = setupServer(...handlers)
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <UIStateProvider>
-        <FinanzasDomainProvider>
-          {children}
-        </FinanzasDomainProvider>
-      </UIStateProvider>
+      <AuthProvider>
+        <UIStateProvider>
+          <FinanzasDomainProvider>
+            {children}
+          </FinanzasDomainProvider>
+        </UIStateProvider>
+      </AuthProvider>
     </QueryClientProvider>
   )
 }
@@ -29,14 +32,16 @@ describe('FinanzasDomainProvider', () => {
     resetHandlers()
   })
 
-  it('expone meses y años navegables', () => {
+  it('carga datos financieros después de autenticar la sesión', async () => {
     const { result } = renderHook(() => useFinanzas(), { wrapper: Wrapper })
-    expect(result.current.monthKeys.length).toBeGreaterThan(6)
+    await waitFor(() => expect(result.current.transacciones).toHaveLength(2))
+    expect(result.current.monthKeys.length).toBeGreaterThan(0)
     expect(result.current.yearKeys.length).toBeGreaterThan(0)
   })
 
   it('agrega una transacción y actualiza saldo', async () => {
     const { result } = renderHook(() => useFinanzas(), { wrapper: Wrapper })
+    await waitFor(() => expect(result.current.transacciones).toHaveLength(2))
     await act(async () => {
       // Use a date later than initial transactions to appear first in sorted list
       await result.current.agregarTransaccion({ descripcion: 'Test', importe: -20, categoria: 'ocio', fecha: '2026-06-20', tipo: 'gasto', cuentaId: '1' })

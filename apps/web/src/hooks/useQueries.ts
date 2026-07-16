@@ -64,18 +64,20 @@ export function useLogout() {
 }
 
 /** Accounts hooks */
-export function useAccounts() {
+export function useAccounts(enabled = true) {
   return useQuery({
     queryKey: queryKeys.accounts.list(),
     queryFn: accountsApi.list,
+    enabled,
   })
 }
 
 /** Categories hooks */
-export function useCategories() {
+export function useCategories(enabled = true) {
   return useQuery({
     queryKey: queryKeys.categories.list(),
     queryFn: categoriesApi.list,
+    enabled,
   })
 }
 
@@ -90,18 +92,20 @@ export function useUpdateCategory() {
 }
 
 /** Settings hooks */
-export function useSettings() {
+export function useSettings(enabled = true) {
   return useQuery({
     queryKey: queryKeys.settings.get(),
     queryFn: settingsApi.get,
+    enabled,
   })
 }
 
 /** Transactions hooks */
-export function useTransactions(filters: Record<string, unknown> = {}) {
+export function useTransactions(filters: Record<string, unknown> = {}, enabled = true) {
   return useQuery({
     queryKey: queryKeys.transactions.list(filters),
     queryFn: () => transactionsApi.list(filters),
+    enabled,
   })
 }
 

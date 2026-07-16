@@ -5,16 +5,19 @@ import { KPICard } from '../components/KPICard.tsx'
 import { BottomNav } from '../components/BottomNav.tsx'
 import { TransactionItem } from '../components/TransactionItem.tsx'
 import { UIStateProvider } from '../contexts/UIStateContext.tsx'
+import { AuthProvider } from '../contexts/AuthContext.tsx'
 import { FinanzasDomainProvider } from '../hooks/FinanzasDomainContext.tsx'
 import { Visibility } from '@toppfinance/shared'
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <UIStateProvider>
-      <FinanzasDomainProvider>
-        {children}
-      </FinanzasDomainProvider>
-    </UIStateProvider>
+    <AuthProvider>
+      <UIStateProvider>
+        <FinanzasDomainProvider>
+          {children}
+        </FinanzasDomainProvider>
+      </UIStateProvider>
+    </AuthProvider>
   )
 }
 
