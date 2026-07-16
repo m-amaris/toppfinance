@@ -387,7 +387,7 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
       date: tx.fecha ?? new Date().toISOString().slice(0, 10),
       amount: tipo === 'ajuste' ? Number(tx.importe) : Math.abs(Number(tx.importe)),
       description: tx.descripcion ?? '',
-      categoryId: tx.categoria ?? '',
+      categoryId: categorias.find(c => c.id === tx.categoria)?.apiId ?? (tx.categoria ?? ''),
       sourceAccountId: String(tx.cuentaId ?? configuracion.cuentaPrincipalId ?? cuentas[0]?.id ?? ''),
       destinationAccountId: (tipo === 'ahorro' || tipo === 'transferencia') ? String(tx.cuentaDestinoId ?? configuracion.cuentaAhorroId ?? configuracion.cuentaTransferenciaDestinoId ?? '') : null,
       visibility: (tx.visibility as Visibility) || Visibility.SHARED,
@@ -399,11 +399,14 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
     }
     await createTxMutation.mutateAsync(payload)
     await refetchTransactions()
-  }, [createTxMutation, refetchTransactions, configuracion, cuentas, user])
+  }, [createTxMutation, refetchTransactions, configuracion, cuentas, user, categorias])
 
   const actualizarTransaccion = useCallback(async (id: string, patch: Partial<SharedTransaction>) => {
     const apiPatch: Record<string, unknown> = {}
-    if (patch.categoria) apiPatch.categoryId = patch.categoria
+    if (patch.categoria) {
+      const cat = categorias.find(c => c.id === patch.categoria)
+      apiPatch.categoryId = cat?.apiId || patch.categoria
+    }
     if (patch.descripcion) apiPatch.description = patch.descripcion
     if (patch.fecha) apiPatch.date = patch.fecha
     if (patch.tipo) apiPatch.type = LOCAL_KEY_TO_TRANSACTION_TYPE[patch.tipo] || patch.tipo
@@ -412,7 +415,7 @@ export function FinanzasDomainProvider({ children }: { children: ReactNode }) {
       await updateTxMutation.mutateAsync({ id, body: apiPatch })
       await refetchTransactions()
     }
-  }, [updateTxMutation, refetchTransactions])
+  }, [updateTxMutation, refetchTransactions, categorias])
 
   const eliminarTransaccion = useCallback(async (id: string) => {
     await deleteTxMutation.mutateAsync(id)
